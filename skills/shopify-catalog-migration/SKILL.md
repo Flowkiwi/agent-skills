@@ -15,7 +15,7 @@ Guide a Flowkiwi developer from Shopify backoffice exports to a catalog created 
 ## Prerequisites
 
 - An agent with shell access and an MCP client. Subagents are optional (see "Running workers").
-- `python3` 3.8+ (scripts use the standard library only).
+- `python3` 3.8+ (scripts use the standard library only). Check once with `python3 --version`; if the command does not exist (often on Windows), use `python` or `py -3` instead everywhere this skill says `python3`, including in worker prompts.
 - The Flowkiwi MCP server connected to the target tenant (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, OAuth). If its tools are missing or ask for authentication, stop and give the developer the setup for their agent from `references/setup.md`.
 
 ## Hard rules

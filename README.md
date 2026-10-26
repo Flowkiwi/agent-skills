@@ -52,7 +52,7 @@ Restart the agent (or open a new session) so it picks up the new skill.
 ## Requirements
 
 - An agent with shell access and an MCP client. When the agent can spawn subagents (Claude Code, Cursor), products are created by parallel workers; otherwise the skill runs them sequentially in the main session, which is slower and better split across sessions for large catalogs.
-- `python3` 3.8+ for the helper scripts (standard library only).
+- `python3` 3.8+ for the helper scripts (standard library only). On Windows, where the command is often `python` or `py`, the skill adapts.
 - The Flowkiwi MCP server (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, streamable HTTP with OAuth), declared under the name `flowkiwi`:
 
 | Agent       | Config file             | Entry                                                          | Authenticate               |
