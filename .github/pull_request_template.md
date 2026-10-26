@@ -4,7 +4,6 @@
 
 ## Validation
 
-- Agents it actually ran with: <!-- e.g. Claude Code (pilot + undo on a test tenant) -->
 - [ ] Only listed agents as "validated" in the README and `compatibility` after a real run
 
 ## Checklist
