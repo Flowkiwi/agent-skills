@@ -83,5 +83,35 @@ class CheckSkillsTest(unittest.TestCase):
         self.assertTrue(any("README" in e for e in check_skills.check(self.root)))
 
 
+
+class CheckPathsTest(unittest.TestCase):
+    def test_allowed_paths(self):
+        files = [
+            "README.md", "LICENSE", ".gitignore",
+            ".claude-plugin/marketplace.json",
+            ".github/workflows/ci.yml", ".github/dependabot.yml",
+            "scripts/check_skills.py",
+            "skills/alpha/SKILL.md",
+            "skills/alpha/references/core.md",
+            "skills/alpha/scripts/tool.py",
+            "skills/alpha/scripts/tests/fixtures/products.csv",
+            "skills/alpha/assets/schema.json.gz",
+        ]
+        self.assertEqual(check_skills.check_paths(files), [])
+
+    def test_rejects_paths_outside_the_allowlist(self):
+        files = [
+            "migrations/acme/state.json",
+            "exports.csv",
+            "skills/alpha/exports/products.csv",
+            "skills/alpha/notes.md",
+            ".claude-plugin/plugin.json",
+        ]
+        errors = check_skills.check_paths(files)
+        self.assertEqual(len(errors), len(files))
+        for path in files:
+            self.assertTrue(any(path in e for e in errors), path)
+
+
 if __name__ == "__main__":
     unittest.main()

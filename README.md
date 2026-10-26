@@ -73,7 +73,7 @@ Ask your agent to migrate a Shopify catalog, for example "migrate the Shopify ca
 
 ## Add a skill to this repository
 
-1. Create `skills/<name>/SKILL.md` with the frontmatter below, plus any `references/` or `scripts/` it needs. Keep the folder self-contained: it is installed alone.
+1. Create `skills/<name>/SKILL.md` with the frontmatter below, plus any `references/`, `scripts/` or `assets/` it needs. Keep the folder self-contained: it is installed alone.
 
    ```yaml
    ---
@@ -95,6 +95,23 @@ Helper script tests of a skill:
 ```bash
 cd skills/shopify-catalog-migration && python3 -m unittest discover -s scripts/tests
 ```
+
+### Allowed paths
+
+The repository is public. Only these paths may be committed, and the CI rejects any other file:
+
+| Path                                 | Content                                                              |
+| ------------------------------------ | -------------------------------------------------------------------- |
+| `skills/<name>/SKILL.md`             | the skill entry point                                                |
+| `skills/<name>/references/`          | reference files loaded on demand                                     |
+| `skills/<name>/scripts/`             | helper scripts and their tests (`scripts/tests/`, fixtures included) |
+| `skills/<name>/assets/`              | static files the skill needs                                         |
+| `.claude-plugin/marketplace.json`    | the Claude Code marketplace                                          |
+| `.github/`                           | CI, Dependabot, PR template                                          |
+| `scripts/`                           | repository tooling and its tests                                     |
+| `README.md`, `LICENSE`, `.gitignore` | repository files                                                     |
+
+Data files (fixtures, samples, assets) must be invented demo data, never a real client's export, migration workspace or MCP output. To allow a new path, update this table and `ALLOWED_PATHS` in `scripts/check_skills.py` in the same PR.
 
 ## License
 

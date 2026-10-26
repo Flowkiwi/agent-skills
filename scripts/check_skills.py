@@ -1,4 +1,5 @@
-"""Check that every skill is consistent with the marketplace and the README.
+"""Check that every skill is consistent with the marketplace and the README,
+and that the repository only tracks files under the allowed paths.
 
 Usage: python3 scripts/check_skills.py [repo_root]
 Exits 1 and lists the problems when something is inconsistent.
@@ -7,7 +8,21 @@ Exits 1 and lists the problems when something is inconsistent.
 import glob
 import json
 import os
+import re
+import subprocess
 import sys
+
+# Keep in sync with the "Allowed paths" section of the README.
+ALLOWED_PATHS = [
+    r"skills/[^/]+/SKILL\.md",
+    r"skills/[^/]+/(references|scripts|assets)/.+",
+    r"\.claude-plugin/marketplace\.json",
+    r"\.github/.+",
+    r"scripts/.+",
+    r"README\.md",
+    r"LICENSE",
+    r"\.gitignore",
+]
 
 
 def frontmatter(path):
@@ -74,9 +89,22 @@ def check(root):
     return errors
 
 
+def check_paths(files):
+    return [
+        f"{path}: not under an allowed path (see the README)"
+        for path in files
+        if not any(re.fullmatch(pattern, path) for pattern in ALLOWED_PATHS)
+    ]
+
+
+def tracked_files(root):
+    output = subprocess.run(["git", "ls-files"], cwd=root, capture_output=True, text=True, check=True).stdout
+    return [line for line in output.split("\n") if line]
+
+
 def main(argv):
     root = argv[1] if len(argv) > 1 else os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-    errors = check(root)
+    errors = check(root) + check_paths(tracked_files(root))
     for error in errors:
         print(f"error: {error}")
     if not errors:
