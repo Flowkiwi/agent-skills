@@ -1,0 +1,18 @@
+{
+  "name": "flowkiwi",
+  "description": "Flowkiwi skills for agent collaboration, each installable on its own",
+  "owner": {
+    "name": "Flowkiwi"
+  },
+  "plugins": [
+    {
+      "name": "shopify-catalog-migration",
+      "source": "./",
+      "strict": false,
+      "description": "Rebuild a Shopify store catalog in a Flowkiwi tenant through the Flowkiwi MCP, from backoffice CSV exports",
+      "category": "migration",
+      "tags": ["shopify", "catalog", "migration", "mcp"],
+      "skills": ["./skills/shopify-catalog-migration"]
+    }
+  ]
+}
