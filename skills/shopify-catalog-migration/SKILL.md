@@ -70,11 +70,11 @@ Work inside the workspace. `$S` = `python3 $SKILL/scripts`.
 ## Phase 3 - Create
 
 1. **Blocking check**: `$S/shopify_csv.py --validate products.json`. Do not go further while any `duplicate_sku`, `missing_sku` or `missing_barcode` remains, or `short_option_name` (it would fail every affected product): they break the uniqueness lookups and parallel workers would race on the same SKU.
-2. **Dry-run summary**: counts per resource to create, shared elements to create or reuse, what is not migrated (images, variant weight), 2-3 fully mapped sample products as MCP payloads, with placeholders like `<product IRI>` for IRIs that only exist after an earlier call. Wait for explicit approval.
+2. **Dry-run summary**: counts per resource to create, shared elements to create or reuse, what is not migrated (images, variant weight), 2-3 fully mapped sample products as MCP payloads (`$S/payload.py <dir> <handle> --dry-run`, which prints `<key IRI>` placeholders for shared elements not created yet; IRIs that only exist after an earlier call, like `<product IRI>`, stay placeholders). Wait for explicit approval.
 3. **Shared elements** (this session, one by one): core marker definition first, then the `## Shared elements` section of each chosen module, in menu order. Record each with `state.py shared`.
-4. **Pilot**: `state.py worklists <dir> --workers 1 --limit 5 --pilot`, dispatch the worker, `state.py merge`. Show the pilot products (`get_product`) and ask the developer to check them in Flowkiwi. If something is wrong: undo the pilot (`references/undo.md`, scope `pilot`), fix the mapping, `state.py reset-deleted`, rerun.
-5. **Full run**: `state.py worklists <dir> --workers 4` (the developer may change the count), dispatch the workers, `state.py merge`, repeat until no `pending` product remains.
-6. **Final report** from `state.py summary`: created / reused / failed per kind, failures with errors and a retry offer (`worklists --retry-failed`), generated barcodes and SKUs count, images not migrated (count; URLs in `products.json`), modules not run that could be added later.
+4. **Pilot**: `state.py worklists <dir> --workers 1 --limit 5 --pilot`, then `$S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json` (pilot products are always in the sample), dispatch the worker, `state.py merge`. Show the pilot products (`get_product`) and ask the developer to check them in Flowkiwi. If something is wrong: undo the pilot (`references/undo.md`, scope `pilot`), fix the mapping, `state.py reset-deleted`, rerun.
+5. **Full run**: `state.py worklists <dir> --workers 4` (the developer may change the count), `verify.py sample` as above, dispatch the workers, `state.py merge`, repeat until no `pending` product remains.
+6. **Final report** from `state.py summary`: created / reused / failed per kind, failures with errors and a retry offer (`worklists --retry-failed`), description checks (`verify` counts: ok / fixed / mismatch, with the mismatched handles to review by hand), lines rejected by `merge` (`results/rejected-*.jsonl`), generated barcodes and SKUs count, images not migrated (count; URLs in `products.json`), modules not run that could be added later.
 
 ## Running workers
 
@@ -85,9 +85,9 @@ Two modes, same files and same procedure:
 
 In both modes:
 
-- Build each prompt from the worker template in `references/core.md`: absolute paths for `{{SKILL}}`, `{{WORKLIST_PATH}}`, `{{PRODUCTS_PATH}}`, `{{STATE_PATH}}`, `{{RESULT_PATH}}` (`results/worker-<n>.jsonl`), `started_at` date for `{{MIGRATION_STARTED_AT}}`, `full` or `module-only` for `{{MODE}}`, core's mapping table (from `## Map and consolidate`) followed by its `## Per product` text for `{{CORE_PER_PRODUCT}}`, and for `{{MODULE_SECTIONS}}`, per chosen module (in menu order): the mapping or conversion rules from its `## Map and consolidate` (workers never read the references) followed by its `## Per product` section. The full `started_at` timestamp goes in `{{MIGRATION_STARTED_AT}}`.
+- Build each prompt from the worker template in `references/core.md`: absolute paths for `{{SKILL}}`, `{{DIR}}` (the workspace), `{{WORKLIST_PATH}}`, `{{PRODUCTS_PATH}}`, `{{STATE_PATH}}`, `{{RESULT_PATH}}` (`results/worker-<n>.jsonl`) and `{{WORK_DIR}}` (`<workspace>/tmp/worker-<n>/`, one per worker), the full `started_at` timestamp for `{{MIGRATION_STARTED_AT}}`, `full` or `module-only` for `{{MODE}}`, core's mapping table (from `## Map and consolidate`) followed by its `## Per product` text for `{{CORE_PER_PRODUCT}}`, and for `{{MODULE_SECTIONS}}`, per chosen module (in menu order): the mapping or conversion rules from its `## Map and consolidate` (workers never read the references) followed by its `## Per product` section.
 - Workers (or you, in sequential mode) append one line per product to `results/worker-<n>.jsonl` with `state.py result` and return a 3-line summary only. Do not ask them for details: read the state instead.
-- After all workers return (or after each sequential batch), run `state.py merge` before anything else.
+- After all workers return (or after each sequential batch), run `state.py merge` before anything else. It rejects lines whose handle is not in that worker's worklist, or claimed by several workers with different IRIs, and writes them to `results/rejected-<stamp>.jsonl`: show them to the developer.
 
 ## Adding a module later
 

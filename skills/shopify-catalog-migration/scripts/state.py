@@ -6,7 +6,7 @@ Usage:
   python3 state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module>
   python3 state.py decide <dir> --key <name> --value-json '<json>'
   python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--retry-failed] [--module <name>]
-  python3 state.py result <results/worker-N.jsonl> --json '<line>'
+  python3 state.py result <results/worker-N.jsonl> --json '<line>' | --json - | --json-file <file>
   python3 state.py merge <dir>
   python3 state.py undo-plan <dir> --scope all|pilot|module:<name>
   python3 state.py deleted <dir> --iris-file <file.json>
@@ -18,6 +18,7 @@ import argparse
 import glob
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -29,6 +30,11 @@ KIND_ORDER = [
 ]
 RESULT_KEYS = {"handle", "status", "iri", "items", "error"}
 RESULT_STATUSES = {"created", "failed"}
+ITEM_STATUSES = {"created", "reused"}
+VERIFY_STATUSES = {"ok", "fixed", "mismatch"}
+IRI_PATTERN = re.compile(
+    r"^/api/[a-z0-9_-]+/[0-9a-fA-F-]{36}(/[a-z0-9_-]+/[0-9a-fA-F-]{36})*(#[a-z_]+(-[A-Za-z0-9_-]+)?)?$"
+)
 
 
 def _new_product():
@@ -95,15 +101,38 @@ def worklists(state, workers, limit, pilot, retry_failed=False, module=None, tit
     return [l for l in lists if l]
 
 
+def _check_iri(iri, link=False):
+    """IRIs are /api/<resource>/<uuid>[/<sub>/<uuid>]; only *_link items carry a #relation suffix."""
+    if not isinstance(iri, str) or not IRI_PATTERN.match(iri):
+        raise ValueError(f"Invalid IRI {iri!r}: expected /api/<resource>/<uuid> exactly as returned by the API")
+    if link != ("#" in iri):
+        raise ValueError(f"IRI {iri!r}: a #relation suffix is required for *_link items and forbidden otherwise")
+
+
 def validate_result(line):
+    if not isinstance(line, dict):
+        raise ValueError("Result line must be a JSON object")
     missing = RESULT_KEYS - set(line)
     if missing:
         raise ValueError(f"Result line is missing keys: {sorted(missing)}")
+    if not isinstance(line["handle"], str) or not line["handle"]:
+        raise ValueError("handle must be a non-empty string")
     if line["status"] not in RESULT_STATUSES:
         raise ValueError(f"Result status must be one of {sorted(RESULT_STATUSES)}")
+    if line["status"] == "created" and not line["iri"]:
+        raise ValueError("iri is required when status is created")
+    if line["iri"] is not None:
+        _check_iri(line["iri"])
+    if line.get("verify") is not None and line["verify"] not in VERIFY_STATUSES:
+        raise ValueError(f"verify must be one of {sorted(VERIFY_STATUSES)}")
+    if not isinstance(line["items"], list):
+        raise ValueError("items must be a list")
     for item in line["items"]:
-        if not {"kind", "iri", "status", "module"} <= set(item):
+        if not isinstance(item, dict) or not {"kind", "iri", "status", "module"} <= set(item):
             raise ValueError("Each item needs kind, iri, status and module")
+        if item["status"] not in ITEM_STATUSES:
+            raise ValueError(f"Item status must be one of {sorted(ITEM_STATUSES)}")
+        _check_iri(item["iri"], link=str(item["kind"]).endswith("_link"))
 
 
 def append_result(path, line):
@@ -128,6 +157,8 @@ def merge(state, lines):
             product["status"] = line["status"]
             product["iri"] = line["iri"] or product["iri"]
             product["error"] = line["error"]
+        if line.get("verify"):
+            product["verify"] = line["verify"]
         known = {i["iri"]: i for i in product["items"]}
         for item in line["items"]:
             existing = known.get(item["iri"])
@@ -199,7 +230,12 @@ def summary(state):
         counts = items.setdefault(key.split(":", 1)[0], {})
         counts[shared["status"]] = counts.get(shared["status"], 0) + 1
     failed = [{"handle": h, "error": p["error"]} for h, p in state["products"].items() if p["status"] == "failed"]
-    return {"products": products, "items": items, "failed": failed}
+    verify = {}
+    for product in state["products"].values():
+        if product.get("verify"):
+            verify[product["verify"]] = verify.get(product["verify"], 0) + 1
+    mismatch = [h for h, p in state["products"].items() if p.get("verify") == "mismatch"]
+    return {"products": products, "items": items, "failed": failed, "verify": verify, "verify_mismatch": mismatch}
 
 
 def _read_json(path):
@@ -216,9 +252,63 @@ def _write_json(path, data):
     os.replace(tmp, path)
 
 
+def check_results(entries, worklists=None, known=None):
+    """Filter valid result entries [{"file", "line", "result"}] before merging.
+
+    A line from worker-<n> whose handle is not in worklists["worker-<n>"] (when given) is rejected, as is
+    a handle unknown to the state. A handle found in several result files: when exactly one product IRI
+    was created, the files that created it are kept and the others rejected; conflicting created IRIs
+    reject every line of that handle. Returns (accepted results, rejected entries with a reason, notes)."""
+    worklists = worklists or {}
+    accepted, rejected, notes = [], [], []
+    for entry in entries:
+        handle, source = entry["result"]["handle"], entry["file"]
+        if known is not None and handle not in known:
+            rejected.append(dict(entry, reason=f"unknown handle '{handle}'"))
+        elif source in worklists and handle not in worklists[source]:
+            rejected.append(dict(entry, reason=f"handle '{handle}' is not in worklists/{source}.json"))
+        else:
+            accepted.append(entry)
+
+    groups = {}
+    for entry in accepted:
+        groups.setdefault((entry["result"]["handle"], entry["result"].get("module")), []).append(entry)
+    dropped = set()
+    for (handle, module), group in groups.items():
+        sources = sorted({e["file"] for e in group})
+        if len(sources) < 2:
+            continue
+        label = handle + (f" (module {module})" if module else "")
+        created = [e for e in group if e["result"]["status"] == "created"]
+        iris = {e["result"]["iri"] for e in created}
+        if len(iris) > 1:
+            reason = f"conflicting created IRIs for '{label}' in {', '.join(sources)}"
+            losers = group
+        elif created:
+            winners = {e["file"] for e in created}
+            reason = f"'{label}' was created by {', '.join(sorted(winners))}"
+            losers = [e for e in group if e["file"] not in winners]
+        else:
+            notes.append(f"'{label}' failed in several result files: {', '.join(sources)}")
+            continue
+        notes.append(reason)
+        for entry in losers:
+            dropped.add(id(entry))
+            rejected.append(dict(entry, reason=reason))
+    return [e["result"] for e in accepted if id(e) not in dropped], rejected, notes
+
+
+def _result_files(directory):
+    return [
+        path for path in sorted(glob.glob(os.path.join(directory, "results", "*.jsonl")))
+        if not os.path.basename(path).startswith("rejected-")
+    ]
+
+
 def _read_results(directory):
-    lines, malformed = [], []
-    for path in sorted(glob.glob(os.path.join(directory, "results", "*.jsonl"))):
+    entries, malformed = [], []
+    for path in _result_files(directory):
+        source = os.path.basename(path)[:-len(".jsonl")]
         with open(path, encoding="utf-8") as f:
             for number, raw in enumerate(f, start=1):
                 if not raw.strip():
@@ -227,17 +317,37 @@ def _read_results(directory):
                     line = json.loads(raw)
                     validate_result(line)
                 except (ValueError, TypeError, AttributeError) as error:
-                    malformed.append(f"{os.path.basename(path)}:{number}: {error}")
+                    malformed.append({"file": source, "line": number, "reason": f"malformed: {error}",
+                                      "raw": raw.rstrip("\n")})
                     continue
-                lines.append(line)
-    return lines, malformed
+                entries.append({"file": source, "line": number, "result": line})
+    return entries, malformed
+
+
+def _read_worklists(directory):
+    worklists = {}
+    for path in glob.glob(os.path.join(directory, "worklists", "worker-*.json")):
+        worklists[os.path.basename(path)[:-len(".json")]] = set(_read_json(path))
+    return worklists
 
 
 def _merge_results(directory, state):
-    lines, malformed = _read_results(directory)
+    """Merge result files, using the worklists present now (before any are replaced)."""
+    entries, malformed = _read_results(directory)
+    lines, rejected, notes = check_results(entries, _read_worklists(directory), set(state["products"]))
     merge(state, lines)
-    for entry in malformed:
-        print(f"skipped malformed result line {entry}")
+    rejected = malformed + rejected
+    for note in notes:
+        print(f"note: {note}")
+    if rejected:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
+        path = os.path.join(directory, "results", f"rejected-{stamp}.jsonl")
+        with open(path, "w", encoding="utf-8") as f:
+            for entry in rejected:
+                f.write(json.dumps(entry, ensure_ascii=False) + "\n")
+        for entry in rejected:
+            print(f"rejected result line {entry['file']}:{entry['line']}: {entry['reason']}")
+        print(f"{len(rejected)} rejected lines written to {path}")
     return len(lines)
 
 
@@ -245,7 +355,7 @@ def _archive_results(directory):
     """Move merged result files out of results/ so they are never merged twice."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S-%f")
     archive = os.path.join(directory, "results", "merged")
-    for path in glob.glob(os.path.join(directory, "results", "*.jsonl")):
+    for path in _result_files(directory):
         os.makedirs(archive, exist_ok=True)
         os.replace(path, os.path.join(archive, f"{stamp}-{os.path.basename(path)}"))
 
@@ -283,7 +393,9 @@ def main(argv):
 
     p = sub.add_parser("result")
     p.add_argument("file")
-    p.add_argument("--json", required=True)
+    source = p.add_mutually_exclusive_group(required=True)
+    source.add_argument("--json", help="the line, or - to read it from stdin")
+    source.add_argument("--json-file")
 
     sub.add_parser("merge").add_argument("dir")
 
@@ -302,8 +414,13 @@ def main(argv):
 
     if args.command == "result":
         try:
-            append_result(args.file, json.loads(args.json))
-        except ValueError as error:
+            if args.json_file:
+                with open(args.json_file, encoding="utf-8") as f:
+                    raw = f.read()
+            else:
+                raw = sys.stdin.read() if args.json == "-" else args.json
+            append_result(args.file, json.loads(raw))
+        except (OSError, ValueError) as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
         return 0

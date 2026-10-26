@@ -10,6 +10,9 @@ migrations/<client-slug>/
 ├── state.json          # decisions, shared elements, per-product progress
 ├── worklists/          # worker-<n>.json: handles assigned to each worker
 ├── results/            # worker-<n>.jsonl: one result line per product, written by workers
+│                       # rejected-<stamp>.jsonl: lines refused by merge, with the reason
+├── verify-sample.json  # handles whose description is checked after creation (verify.py sample)
+├── tmp/                # worker-<n>/: each worker's own temporary files (line.json, readback.txt)
 └── undo/               # deleted-<timestamp>.json: IRIs deleted by an undo run
 ```
 
@@ -53,16 +56,17 @@ Applied with `codes.py fix products.json fixes.json` (idempotent).
 {
   "version": 1, "client": "acme", "mcp_url": "https://...", "started_at": "2026-10-26T10:00:00Z",
   "decisions": {"modules": ["core", "prices"], "status_mode": "draft", "codes": {"prefix": "2", "next_start": 6, "sku_pattern": "{handle}-{index}"}},
-  "shared": {"category:T-shirts": {"iri": "/api/categories/...", "status": "created", "module": "taxonomy"}},
+  "shared": {"category:T-shirts": {"iri": "/api/categories/019f84f8-...", "status": "created", "module": "taxonomy"}},
   "products": {"tshirt-basic": {
     "status": "pending", "iri": null, "pilot": false, "error": null,
-    "items": [{"kind": "variant", "iri": "/api/...", "status": "created", "module": "core"}]
+    "items": [{"kind": "variant", "iri": "/api/products/019f.../variants/019f...", "status": "created", "module": "core"}]
   }}
 }
 ```
 
 - Product status: `pending`, `created`, `failed`, `deleted`, `skipped` (handle no longer in `products.json`; back to `pending` if it reappears).
 - `module_errors`: `{"<module>": "<error>"}` from module-only runs; they never change the product status.
+- `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
 - `decisions.adopt`: `{"<handle>": "<tenant product IRI>"}` for Shopify products mapped to an existing tenant product during consolidation.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Shared keys are `<kind>:<name>`, e.g. `category:T-shirts`, `supplier:Acme`, `metafield_definition:shopify.handle`.
@@ -72,13 +76,23 @@ Applied with `codes.py fix products.json fixes.json` (idempotent).
 ## Worker result line
 
 ```json
-{"handle": "tshirt-basic", "status": "created", "iri": "/api/products/...", "error": null,
- "items": [{"kind": "product", "iri": "/api/products/...", "status": "created", "module": "core"}]}
+{"handle": "tshirt-basic", "status": "created", "iri": "/api/products/019f84f8-...", "error": null, "verify": "ok",
+ "items": [{"kind": "product", "iri": "/api/products/019f84f8-...", "status": "created", "module": "core"}]}
 ```
 
-`status` is `created` or `failed`. On failure, still list the items created before the failure so they can be reused or undone. Module-only runs add `"module": "<name>"`: the line then only adds items and a per-module error.
+`status` is `created` or `failed`. On failure, still list the items created before the failure so they can be reused or undone. Module-only runs add `"module": "<name>"`: the line then only adds items and a per-module error. Optional `verify`: `ok`, `fixed` or `mismatch`.
 
-`merge` moves merged files to `results/merged/`, so a result line is never applied twice (e.g. after an undo).
+`state.py result` rejects a line that does not follow these rules:
+- every IRI is `/api/<resource>/<uuid>` (nested: `/api/<resource>/<uuid>/<sub>/<uuid>`), exactly as returned by the API;
+- `iri` is required when `status` is `created`;
+- only `*_link` items carry a `#<relation>` suffix (`#translations-<locale>` for translations), and they must;
+- item `status` is `created` or `reused`.
+
+`merge` validates again, then:
+- rejects a line from `results/worker-<n>.jsonl` whose handle is not in `worklists/worker-<n>.json` (when that worklist exists), or is unknown to the state;
+- for a handle found in several result files: keeps the files that created it when they agree on one product IRI and rejects the others; rejects every line of that handle when the created IRIs conflict;
+- writes rejected and malformed lines to `results/rejected-<stamp>.jsonl` with the reason, and prints them;
+- moves merged files to `results/merged/`, so a result line is never applied twice (e.g. after an undo).
 
 ## Commands
 
@@ -87,15 +101,22 @@ S=$SKILL/scripts
 python3 $S/state.py init <dir> --client acme --mcp-url https://...   # refuses if state.json exists
 python3 $S/state.py sync <dir>                                       # new handles from products.json
 python3 $S/state.py decide <dir> --key status_mode --value-json '"draft"'
-python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/1 --status created --module taxonomy
+python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/019f84f8-0000-7000-8000-000000000001 --status created --module taxonomy
 python3 $S/state.py worklists <dir> --workers 4 [--limit 5 --pilot] [--retry-failed] [--module prices]
-python3 $S/state.py result <dir>/results/worker-1.jsonl --json '<result line>'
+python3 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 python3 $S/state.py merge <dir>
 python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>
 python3 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 python3 $S/state.py reset-deleted <dir>                              # deleted products back to pending
 python3 $S/state.py summary <dir>
+python3 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|all] [--dry-run]
+python3 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
+python3 $S/verify.py <dir> <handle> --field description --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
 ```
+
+`payload.py` prints the exact MCP bodies of one product (status from `status_mode`, tags joined with `,`, marker, options with positions, variants with their option value names, metafields whose definition is recorded in `shared`). Non-ASCII letters stay literal; invisible or special whitespace characters are printed as `\uXXXX` escapes. A missing decision or shared IRI is an error (`--dry-run`: a `<key IRI>` placeholder).
+
+`verify.py` compares a read-back value with `products.json` after normalizing line endings, Unicode composition and outer whitespace, and prints both lengths, both SHA-256 and the first differing position with its context. `sample` lists ~`rate` of the handles (deterministic hash), every handle whose description holds special whitespace or non-ASCII punctuation, and the pilot products.
 
 `worklists` first merges any unmerged results, then writes fresh worklists. Products sharing the same title always go to the same worker, so the orphan rule can never adopt another worker's product.
 

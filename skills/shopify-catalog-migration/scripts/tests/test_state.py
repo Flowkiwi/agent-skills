@@ -1,16 +1,21 @@
-import io
+import glob
 import json
 import os
 import subprocess
 import sys
 import tempfile
 import unittest
+import uuid
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 import state  # noqa: E402
 
 SCRIPT = os.path.join(os.path.dirname(__file__), "..", "state.py")
+
+
+def iri(resource, name):
+    return f"/api/{resource}/{uuid.uuid5(uuid.NAMESPACE_URL, resource + name)}"
 
 
 def products(*handles):
@@ -66,10 +71,10 @@ class StateFunctionsTest(unittest.TestCase):
 
     def test_worklists_module_targets_created_products_without_module_items(self):
         state.merge(self.state, [
-            {"handle": "a", "status": "created", "iri": "/p/a", "error": None,
-             "items": [item("product", "/p/a"), item("sale_offer", "/so/a", module="prices")]},
-            {"handle": "b", "status": "created", "iri": "/p/b", "error": None,
-             "items": [item("product", "/p/b")]},
+            {"handle": "a", "status": "created", "iri": iri("products", "a"), "error": None,
+             "items": [item("product", iri("products", "a")), item("sale_offer", iri("sale_offers", "a"), module="prices")]},
+            {"handle": "b", "status": "created", "iri": iri("products", "b"), "error": None,
+             "items": [item("product", iri("products", "b"))]},
         ])
         flat = [h for l in state.worklists(self.state, 2, None, False, module="prices") for h in l]
         self.assertEqual(flat, ["b"])
@@ -81,56 +86,56 @@ class StateFunctionsTest(unittest.TestCase):
     def test_merge_last_line_wins(self):
         state.merge(self.state, [
             {"handle": "a", "status": "failed", "iri": None, "items": [], "error": "boom"},
-            {"handle": "a", "status": "created", "iri": "/api/products/1", "items": [], "error": None},
+            {"handle": "a", "status": "created", "iri": iri("products", "1"), "items": [], "error": None},
         ])
         self.assertEqual(self.state["products"]["a"]["status"], "created")
-        self.assertEqual(self.state["products"]["a"]["iri"], "/api/products/1")
+        self.assertEqual(self.state["products"]["a"]["iri"], iri("products", "1"))
         self.assertIsNone(self.state["products"]["a"]["error"])
 
     def test_merge_no_duplicate_items(self):
-        line = {"handle": "a", "status": "created", "iri": "/api/products/1",
-                "items": [item("product", "/api/products/1")], "error": None}
+        line = {"handle": "a", "status": "created", "iri": iri("products", "1"),
+                "items": [item("product", iri("products", "1"))], "error": None}
         state.merge(self.state, [line])
         state.merge(self.state, [line])
         self.assertEqual(len(self.state["products"]["a"]["items"]), 1)
 
     def test_merge_keeps_items_of_failed_attempt(self):
-        state.merge(self.state, [{"handle": "a", "status": "failed", "iri": "/api/products/1",
-                                  "items": [item("product", "/api/products/1")], "error": "variant 422"}])
-        self.assertEqual(self.state["products"]["a"]["items"][0]["iri"], "/api/products/1")
+        state.merge(self.state, [{"handle": "a", "status": "failed", "iri": iri("products", "1"),
+                                  "items": [item("product", iri("products", "1"))], "error": "variant 422"}])
+        self.assertEqual(self.state["products"]["a"]["items"][0]["iri"], iri("products", "1"))
 
     def test_merge_missing_line_stays_pending(self):
-        state.merge(self.state, [{"handle": "a", "status": "created", "iri": "/x", "items": [], "error": None}])
+        state.merge(self.state, [{"handle": "a", "status": "created", "iri": iri("products", "x"), "items": [], "error": None}])
         self.assertEqual(self.state["products"]["b"]["status"], "pending")
 
     def test_record_shared(self):
-        state.record_shared(self.state, "category:Shoes", "/api/categories/1", "created", "taxonomy")
+        state.record_shared(self.state, "category:Shoes", iri("categories", "1"), "created", "taxonomy")
         self.assertEqual(self.state["shared"]["category:Shoes"],
-                         {"iri": "/api/categories/1", "status": "created", "module": "taxonomy"})
+                         {"iri": iri("categories", "1"), "status": "created", "module": "taxonomy"})
 
     def _populate(self):
         self.state["products"]["a"]["pilot"] = True
         state.merge(self.state, [
-            {"handle": "a", "status": "created", "iri": "/p/a", "error": None, "items": [
-                item("product", "/p/a"), item("variant", "/v/a"), item("sale_offer", "/so/a", module="prices"),
+            {"handle": "a", "status": "created", "iri": iri("products", "a"), "error": None, "items": [
+                item("product", iri("products", "a")), item("variant", iri("variants", "a")), item("sale_offer", iri("sale_offers", "a"), module="prices"),
             ]},
-            {"handle": "b", "status": "created", "iri": "/p/b", "error": None, "items": [
-                item("product", "/p/b", status="reused"), item("variant", "/v/b"),
+            {"handle": "b", "status": "created", "iri": iri("products", "b"), "error": None, "items": [
+                item("product", iri("products", "b"), status="reused"), item("variant", iri("variants", "b")),
             ]},
         ])
-        state.record_shared(self.state, "category:Shoes", "/c/1", "created", "taxonomy")
-        state.record_shared(self.state, "supplier:Acme", "/s/1", "reused", "costs-suppliers")
+        state.record_shared(self.state, "category:Shoes", iri("categories", "1"), "created", "taxonomy")
+        state.record_shared(self.state, "supplier:Acme", iri("suppliers", "1"), "reused", "costs-suppliers")
 
     def test_undo_order(self):
         self._populate()
         iris = [step["iri"] for step in state.undo_plan(self.state, "all")]
-        self.assertLess(iris.index("/so/a"), iris.index("/v/a"))
-        self.assertLess(iris.index("/v/a"), iris.index("/p/a"))
-        self.assertLess(iris.index("/p/a"), iris.index("/c/1"))
+        self.assertLess(iris.index(iri("sale_offers", "a")), iris.index(iri("variants", "a")))
+        self.assertLess(iris.index(iri("variants", "a")), iris.index(iri("products", "a")))
+        self.assertLess(iris.index(iri("products", "a")), iris.index(iri("categories", "1")))
 
     def test_undo_link_items_before_product(self):
-        state.merge(self.state, [{"handle": "c", "status": "created", "iri": "/p/c", "error": None, "items": [
-            item("product", "/p/c"), item("channel_link", "/p/c#channels", module="channels"),
+        state.merge(self.state, [{"handle": "c", "status": "created", "iri": iri("products", "c"), "error": None, "items": [
+            item("product", iri("products", "c")), item("channel_link", iri("products", "c") + "#channels", module="channels"),
         ]}])
         kinds = [s["kind"] for s in state.undo_plan(self.state, "all")]
         self.assertLess(kinds.index("channel_link"), kinds.index("product"))
@@ -138,35 +143,35 @@ class StateFunctionsTest(unittest.TestCase):
     def test_undo_excludes_reused(self):
         self._populate()
         iris = [step["iri"] for step in state.undo_plan(self.state, "all")]
-        self.assertNotIn("/p/b", iris)
-        self.assertNotIn("/s/1", iris)
-        self.assertIn("/v/b", iris)
+        self.assertNotIn(iri("products", "b"), iris)
+        self.assertNotIn(iri("suppliers", "1"), iris)
+        self.assertIn(iri("variants", "b"), iris)
 
     def test_undo_pilot_scope(self):
         self._populate()
         iris = {step["iri"] for step in state.undo_plan(self.state, "pilot")}
-        self.assertEqual(iris, {"/p/a", "/v/a", "/so/a"})
+        self.assertEqual(iris, {iri("products", "a"), iri("variants", "a"), iri("sale_offers", "a")})
 
     def test_undo_module_scope(self):
         self._populate()
-        self.assertEqual([s["iri"] for s in state.undo_plan(self.state, "module:prices")], ["/so/a"])
-        self.assertEqual([s["iri"] for s in state.undo_plan(self.state, "module:taxonomy")], ["/c/1"])
+        self.assertEqual([s["iri"] for s in state.undo_plan(self.state, "module:prices")], [iri("sale_offers", "a")])
+        self.assertEqual([s["iri"] for s in state.undo_plan(self.state, "module:taxonomy")], [iri("categories", "1")])
 
     def test_undo_skips_deleted(self):
         self._populate()
-        state.mark_deleted(self.state, ["/so/a"])
+        state.mark_deleted(self.state, [iri("sale_offers", "a")])
         iris = [step["iri"] for step in state.undo_plan(self.state, "all")]
-        self.assertNotIn("/so/a", iris)
+        self.assertNotIn(iri("sale_offers", "a"), iris)
 
     def test_mark_deleted_product_status(self):
         self._populate()
-        state.mark_deleted(self.state, ["/p/a", "/c/1"])
+        state.mark_deleted(self.state, [iri("products", "a"), iri("categories", "1")])
         self.assertEqual(self.state["products"]["a"]["status"], "deleted")
         self.assertEqual(self.state["shared"]["category:Shoes"]["status"], "deleted")
 
     def test_reset_deleted_makes_products_pending_again(self):
         self._populate()
-        state.mark_deleted(self.state, ["/so/a", "/v/a", "/p/a"])
+        state.mark_deleted(self.state, [iri("sale_offers", "a"), iri("variants", "a"), iri("products", "a")])
         state.reset_deleted(self.state)
         product = self.state["products"]["a"]
         self.assertEqual(product["status"], "pending")
@@ -191,30 +196,30 @@ class StateFunctionsTest(unittest.TestCase):
 
     def test_module_result_does_not_change_product_status(self):
         self._populate()
-        state.merge(self.state, [{"handle": "a", "status": "failed", "iri": "/p/a", "module": "channels",
+        state.merge(self.state, [{"handle": "a", "status": "failed", "iri": iri("products", "a"), "module": "channels",
                                   "items": [], "error": "422"}])
         self.assertEqual(self.state["products"]["a"]["status"], "created")
         self.assertEqual(self.state["products"]["a"]["module_errors"], {"channels": "422"})
 
     def test_module_worklist_ignores_deleted_module_items(self):
         self._populate()
-        state.mark_deleted(self.state, ["/so/a"])
+        state.mark_deleted(self.state, [iri("sale_offers", "a")])
         flat = [h for l in state.worklists(self.state, 2, None, False, module="prices") for h in l]
         self.assertIn("a", flat)
 
     def test_merge_revives_deleted_item_with_same_iri(self):
         self._populate()
-        state.mark_deleted(self.state, ["/so/a"])
-        state.merge(self.state, [{"handle": "a", "status": "created", "iri": "/p/a", "module": "prices",
-                                  "items": [item("sale_offer", "/so/a", module="prices")], "error": None}])
-        statuses = [i["status"] for i in self.state["products"]["a"]["items"] if i["iri"] == "/so/a"]
+        state.mark_deleted(self.state, [iri("sale_offers", "a")])
+        state.merge(self.state, [{"handle": "a", "status": "created", "iri": iri("products", "a"), "module": "prices",
+                                  "items": [item("sale_offer", iri("sale_offers", "a"), module="prices")], "error": None}])
+        statuses = [i["status"] for i in self.state["products"]["a"]["items"] if i["iri"] == iri("sale_offers", "a")]
         self.assertEqual(statuses, ["created"])
 
     def test_undo_deletes_later_shared_items_first_within_kind(self):
-        state.record_shared(self.state, "category:Apparel", "/c/parent", "created", "taxonomy")
-        state.record_shared(self.state, "category:Apparel > Shirts", "/c/child", "created", "taxonomy")
+        state.record_shared(self.state, "category:Apparel", iri("categories", "parent"), "created", "taxonomy")
+        state.record_shared(self.state, "category:Apparel > Shirts", iri("categories", "child"), "created", "taxonomy")
         iris = [s["iri"] for s in state.undo_plan(self.state, "all")]
-        self.assertLess(iris.index("/c/child"), iris.index("/c/parent"))
+        self.assertLess(iris.index(iri("categories", "child")), iris.index(iri("categories", "parent")))
 
     def test_summary(self):
         self._populate()
@@ -224,6 +229,109 @@ class StateFunctionsTest(unittest.TestCase):
         self.assertEqual(summary["products"]["failed"], 1)
         self.assertEqual(summary["items"]["variant"]["created"], 2)
         self.assertEqual(summary["failed"], [{"handle": "c", "error": "422"}])
+
+
+def line(handle, status="created", items=(), **extra):
+    data = {"handle": handle, "status": status, "iri": iri("products", handle) if status == "created" else None,
+            "items": list(items), "error": None if status == "created" else "boom"}
+    data.update(extra)
+    return data
+
+
+def entry(source, result, number=1):
+    return {"file": source, "line": number, "result": result}
+
+
+class ValidateResultTest(unittest.TestCase):
+    def test_valid_line(self):
+        state.validate_result(line("a", items=[item("product", iri("products", "a")),
+                                               item("channel_link", iri("products", "a") + "#channels")]))
+
+    def test_nested_iri_is_valid(self):
+        nested = iri("products", "a") + "/options/" + str(uuid.uuid5(uuid.NAMESPACE_URL, "o"))
+        state.validate_result(line("a", items=[item("product_option", nested)]))
+
+    def test_translation_link_with_locale(self):
+        state.validate_result(line("a", items=[
+            item("translation_link", iri("products", "a") + "#translations-de-DE", module="translations")]))
+
+    def test_rejects_non_uuid_iri(self):
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[item("product", "/api/products/1")]))
+
+    def test_rejects_retyped_iri(self):
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[item("variant", "api/variants/" + "0" * 36)]))
+
+    def test_created_requires_iri(self):
+        with self.assertRaises(ValueError):
+            state.validate_result(dict(line("a"), iri=None))
+
+    def test_failed_allows_null_iri(self):
+        state.validate_result(line("a", status="failed"))
+
+    def test_relation_suffix_only_for_links(self):
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[item("product", iri("products", "a") + "#channels")]))
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[item("channel_link", iri("products", "a"))]))
+
+    def test_verify_key(self):
+        state.validate_result(line("a", verify="fixed"))
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", verify="maybe"))
+
+    def test_item_status(self):
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[item("product", iri("products", "a"), status="deleted")]))
+
+
+class CheckResultsTest(unittest.TestCase):
+    def test_rejects_handle_outside_worklist(self):
+        accepted, rejected, _ = state.check_results(
+            [entry("worker-1", line("a")), entry("worker-1", line("b"))], {"worker-1": {"a"}})
+        self.assertEqual([r["handle"] for r in accepted], ["a"])
+        self.assertEqual(rejected[0]["result"]["handle"], "b")
+        self.assertIn("worklists/worker-1.json", rejected[0]["reason"])
+
+    def test_no_worklist_no_check(self):
+        accepted, rejected, _ = state.check_results([entry("worker-2", line("b"))], {"worker-1": {"a"}})
+        self.assertEqual(len(accepted), 1)
+        self.assertEqual(rejected, [])
+
+    def test_rejects_unknown_handle(self):
+        accepted, rejected, _ = state.check_results([entry("worker-1", line("zz"))], known={"a"})
+        self.assertEqual(accepted, [])
+        self.assertIn("unknown handle", rejected[0]["reason"])
+
+    def test_same_handle_in_two_files_keeps_created(self):
+        accepted, rejected, notes = state.check_results(
+            [entry("worker-1", line("a", status="failed")), entry("worker-2", line("a"))])
+        self.assertEqual([r["status"] for r in accepted], ["created"])
+        self.assertEqual(rejected[0]["file"], "worker-1")
+        self.assertTrue(notes)
+
+    def test_conflicting_created_iris_reject_all(self):
+        other = dict(line("a"), iri=iri("products", "other"))
+        accepted, rejected, notes = state.check_results([entry("worker-1", line("a")), entry("worker-2", other)])
+        self.assertEqual(accepted, [])
+        self.assertEqual(len(rejected), 2)
+        self.assertIn("conflicting", notes[0])
+
+    def test_retries_in_same_file_are_kept(self):
+        accepted, rejected, notes = state.check_results(
+            [entry("worker-1", line("a", status="failed")), entry("worker-1", line("a"), 2)])
+        self.assertEqual(len(accepted), 2)
+        self.assertEqual((rejected, notes), ([], []))
+
+
+class SummaryVerifyTest(unittest.TestCase):
+    def test_verify_counts(self):
+        st = state.init("acme", "u", products("a", "b", "c"))
+        state.merge(st, [line("a", verify="ok"), line("b", verify="mismatch"), line("c")])
+        summary = state.summary(st)
+        self.assertEqual(summary["verify"], {"ok": 1, "mismatch": 1})
+        self.assertEqual(summary["verify_mismatch"], ["b"])
 
 
 class StateCliTest(unittest.TestCase):
@@ -247,12 +355,49 @@ class StateCliTest(unittest.TestCase):
         with open(os.path.join(self.dir, "worklists", "worker-1.json")) as f:
             self.assertEqual(len(json.load(f)), 1)
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
-        line = {"handle": "a", "status": "created", "iri": "/p/a", "items": [], "error": None}
+        line = {"handle": "a", "status": "created", "iri": iri("products", "a"), "items": [], "error": None}
         self.assertEqual(run_cli("result", result_file, "--json", json.dumps(line)).returncode, 0)
         merged = run_cli("merge", self.dir)
         self.assertEqual(merged.returncode, 0, merged.stderr)
         with open(os.path.join(self.dir, "state.json")) as f:
             self.assertEqual(json.load(f)["products"]["a"]["status"], "created")
+
+    def test_result_from_file_and_stdin(self):
+        result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
+        line_file = os.path.join(self.dir, "line.json")
+        with open(line_file, "w", encoding="utf-8") as f:
+            json.dump(line("a", error=None, items=[]), f)
+            f.write("\n")
+        self.assertEqual(run_cli("result", result_file, "--json-file", line_file).returncode, 0)
+        piped = subprocess.run([sys.executable, SCRIPT, "result", result_file, "--json", "-"],
+                               input=json.dumps(line("b")), capture_output=True, text=True)
+        self.assertEqual(piped.returncode, 0, piped.stderr)
+        with open(result_file, encoding="utf-8") as f:
+            self.assertEqual([json.loads(l)["handle"] for l in f], ["a", "b"])
+        both = run_cli("result", result_file, "--json", "{}", "--json-file", line_file)
+        self.assertNotEqual(both.returncode, 0)
+
+    def test_merge_writes_rejected_lines(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
+        run_cli("worklists", self.dir, "--workers", "2")
+        with open(os.path.join(self.dir, "worklists", "worker-1.json")) as f:
+            mine = json.load(f)[0]
+        other = "b" if mine == "a" else "a"
+        result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
+        run_cli("result", result_file, "--json", json.dumps(line(mine)))
+        run_cli("result", result_file, "--json", json.dumps(line(other)))
+        merged = run_cli("merge", self.dir)
+        self.assertEqual(merged.returncode, 0, merged.stderr)
+        self.assertIn("rejected", merged.stdout)
+        rejected = glob.glob(os.path.join(self.dir, "results", "rejected-*.jsonl"))
+        self.assertEqual(len(rejected), 1)
+        with open(rejected[0], encoding="utf-8") as f:
+            self.assertEqual(json.loads(f.readline())["result"]["handle"], other)
+        with open(os.path.join(self.dir, "state.json")) as f:
+            products_state = json.load(f)["products"]
+        self.assertEqual(products_state[mine]["status"], "created")
+        self.assertEqual(products_state[other]["status"], "pending")
+        self.assertIn("0 result lines merged", run_cli("merge", self.dir).stdout)
 
     def test_result_rejects_missing_keys(self):
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
@@ -261,12 +406,12 @@ class StateCliTest(unittest.TestCase):
     def test_merge_does_not_replay_merged_results(self):
         run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
-        line = {"handle": "a", "status": "created", "iri": "/p/a", "items": [item("product", "/p/a")], "error": None}
+        line = {"handle": "a", "status": "created", "iri": iri("products", "a"), "items": [item("product", iri("products", "a"))], "error": None}
         run_cli("result", result_file, "--json", json.dumps(line))
         run_cli("merge", self.dir)
         iris_file = os.path.join(self.dir, "deleted.json")
         with open(iris_file, "w") as f:
-            json.dump(["/p/a"], f)
+            json.dump([iri("products", "a")], f)
         run_cli("deleted", self.dir, "--iris-file", iris_file)
         run_cli("reset-deleted", self.dir)
         run_cli("merge", self.dir)
@@ -278,7 +423,7 @@ class StateCliTest(unittest.TestCase):
         os.makedirs(os.path.join(self.dir, "results"))
         with open(os.path.join(self.dir, "results", "worker-1.jsonl"), "w") as f:
             f.write("{not json\n")
-            f.write(json.dumps({"handle": "b", "status": "created", "iri": "/p/b", "items": [], "error": None}) + "\n")
+            f.write(json.dumps({"handle": "b", "status": "created", "iri": iri("products", "b"), "items": [], "error": None}) + "\n")
         merged = run_cli("merge", self.dir)
         self.assertEqual(merged.returncode, 0)
         self.assertIn("malformed", merged.stdout + merged.stderr)
