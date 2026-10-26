@@ -87,7 +87,7 @@ Ask your agent to migrate a Shopify catalog, for example "migrate the Shopify ca
 
 2. Add a plugin entry to `.claude-plugin/marketplace.json`, with `"source": "./"`, `"strict": false` and `"skills": ["./skills/<name>"]`, so the plugin loads only this skill.
 3. Add a row to the skills table above.
-4. Run `claude plugin validate .` and `npx skills add . --list`.
+4. Run `python3 scripts/check_skills.py`, `claude plugin validate . --strict` and `npx skills add . --list`. The CI runs the same checks plus every skill's script tests on Python 3.8 and 3.13.
 5. Only list an agent as validated after a real run with it.
 
 Helper script tests of a skill:

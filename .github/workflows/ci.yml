@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Tests (Python ${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Lowest version the skills support, then the latest one.
+          - os: ubuntu-22.04
+            python: "3.8"
+          - os: ubuntu-latest
+            python: "3.13"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Repository checks tests
+        run: python -m unittest discover -s scripts/tests -v
+      - name: Skill script tests
+        run: |
+          status=0
+          for tests in skills/*/scripts/tests; do
+            [ -d "$tests" ] || continue
+            skill_dir="${tests%/scripts/tests}"
+            echo "::group::$skill_dir"
+            (cd "$skill_dir" && python -m unittest discover -s scripts/tests -v) || status=1
+            echo "::endgroup::"
+          done
+          exit $status
+
+  skills:
+    name: Skills and marketplace
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Skills are consistent with the marketplace and the README
+        run: python scripts/check_skills.py
+      - name: Claude Code marketplace validation
+        run: npx -y @anthropic-ai/claude-code plugin validate . --strict
+      - name: Skills CLI discovery
+        env:
+          CI: "true"
+        run: |
+          npx -y skills add . --list < /dev/null | tee skills-list.txt
+          for skill in skills/*/; do
+            name="$(basename "$skill")"
+            grep -q "$name" skills-list.txt || { echo "::error::skills CLI does not find $name"; exit 1; }
+          done
