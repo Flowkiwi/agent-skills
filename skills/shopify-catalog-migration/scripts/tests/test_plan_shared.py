@@ -65,6 +65,16 @@ class PlanSharedTest(unittest.TestCase):
         state.mark_deleted(st, [iri("categories", "drinks")])
         self.assertIn("category:Drinks", [e["key"] for e in plan_shared.plan(st)])
 
+    def test_marker_follows_data_language(self):
+        st = make_state()
+        self.assertEqual(plan_shared.plan(st)[0]["body"]["name"], "Shopify handle")
+        state.decide(st, "data_language", "fr-FR")
+        marker = plan_shared.plan(st)[0]["body"]
+        self.assertEqual(marker["name"], "Handle Shopify")
+        self.assertEqual(marker["description"], "Marqueur technique posé par la migration Shopify")
+        state.decide(st, "marker_labels", {"name": "Shopify-kenmerk", "description": "Technisch kenmerk"})
+        self.assertEqual(plan_shared.plan(st)[0]["body"]["name"], "Shopify-kenmerk")
+
     def test_cli_ready(self):
         with tempfile.TemporaryDirectory() as tmp:
             with open(os.path.join(tmp, "state.json"), "w", encoding="utf-8") as f:

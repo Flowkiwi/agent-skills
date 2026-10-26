@@ -10,7 +10,7 @@ Medium to high: ~5 min per Shopify collection to list its products.
 
 ## Map and consolidate
 
-1. Read the file, report: collections and product counts, handles that are not in `products.json` (typo or product not exported), collection titles shorter than 3 characters.
+1. Read the file, report: collections and product counts, handles that are not in `products.json` (typo or product not exported), collection titles shorter than 3 characters. Titles typed by the developer are kept as is; any title you propose is in `decisions.data_language`.
 2. Smart collections: Flowkiwi collections are plain lists. They are created with their membership **at export time**; say so to the developer once.
 3. Status of the created collections: `ACTIVE` by default.
 4. Record with `state.py decide <dir> --key collections --value-json '<json>'`: `{"status": "...", "membership": {"<handle>": ["<collection title>", ...]}}`.

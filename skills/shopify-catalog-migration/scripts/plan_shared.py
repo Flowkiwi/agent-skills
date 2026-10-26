@@ -19,6 +19,13 @@ from payload import MARKER_KEY, PayloadError, dumps, shared_iri
 
 OWNER_TYPE = "/api/metafield_owner_types/products"
 TYPE_PREFIX = "/api/metafield_definition_types/"
+MARKER_LABELS = {
+    "en": ("Shopify handle", "Technical marker set by the Shopify migration"),
+    "fr": ("Handle Shopify", "Marqueur technique posé par la migration Shopify"),
+    "de": ("Shopify-Handle", "Technische Markierung der Shopify-Migration"),
+    "es": ("Handle de Shopify", "Marcador técnico de la migración de Shopify"),
+    "it": ("Handle Shopify", "Marcatore tecnico della migrazione Shopify"),
+}
 
 
 def _recorded(state, key):
@@ -37,6 +44,15 @@ def _metafield_definition(namespace_key, name, kind):
     return {"namespace": namespace, "key": key, "name": name, "ownerType": OWNER_TYPE, "type": TYPE_PREFIX + kind}
 
 
+def marker_labels(decisions):
+    """Marker name and description in the data language; `marker_labels` decision for other languages."""
+    custom = decisions.get("marker_labels")
+    if isinstance(custom, dict) and custom.get("name"):
+        return custom["name"], custom.get("description") or MARKER_LABELS["en"][1]
+    language = str(decisions.get("data_language") or "en").lower().split("-")[0].split("_")[0]
+    return MARKER_LABELS.get(language, MARKER_LABELS["en"])
+
+
 def plan(state, metafield_columns=None):
     decisions = state.get("decisions", {})
     entries = []
@@ -49,8 +65,9 @@ def plan(state, metafield_columns=None):
         entry["depends_on"] = depends_on or []
         entries.append(entry)
 
-    marker = _metafield_definition("shopify.handle", "Shopify handle", "single_line_text_field")
-    marker["description"] = "Technical marker set by the Shopify migration"
+    name, description = marker_labels(decisions)
+    marker = _metafield_definition("shopify.handle", name, "single_line_text_field")
+    marker["description"] = description
     add(MARKER_KEY, "core", "create_metafield_definition",
         "list_metafield_definitions: namespace shopify, key handle, owner type products", marker)
 

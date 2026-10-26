@@ -36,7 +36,7 @@ Flowkiwi definitions: `namespace`, `key`, `name` (3+ chars each), `ownerType` (`
 5. **Validate every type explicitly**: show a table with one row per kept definition (`namespace.key`, name, Shopify type or `inferred`, proposed Flowkiwi type, value count) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values (`references/undo.md`, scope `shared:<key>`), then recreating them. Show the table again in the dry-run summary.
 6. Record the kept definitions with `state.py decide <dir> --key metafields --value-file metafields.json`, in this format (read by `payload.py` and `plan_shared.py`):
    `{"definitions": {"custom.ingredients": {"type": "multi_line_text_field", "name": "Ingredients", "transform": null}}}`.
-   `type` is the Flowkiwi type, `name` defaults to the CSV column label, optional `source` is the Shopify `namespace.key` when renamed. `transform`: `null` (value as is), `list_json` (`["a","b"]` or `a; b` -> a JSON array string), `list` (same, as a JSON array), `number`, `json` (parsed), `strip_html` (HTML to plain text lines). Pick the list format with one `create_metafield` on the pilot.
+   `type` is the Flowkiwi type, `name` defaults to the CSV column label (already in the store language; a name you write yourself, e.g. from a key without label, is in `decisions.data_language`), optional `source` is the Shopify `namespace.key` when renamed. `transform`: `null` (value as is), `list_json` (`["a","b"]` or `a; b` -> a JSON array string), `list` (same, as a JSON array), `number`, `json` (parsed), `strip_html` (HTML to plain text lines). Pick the list format with one `create_metafield` on the pilot.
 
 ## Shared elements
 

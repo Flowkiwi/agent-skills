@@ -43,7 +43,8 @@ Consolidation questions, one at a time, in this order. Renames and skips go into
 The marker definition, before any product (first entry of `plan_shared.py`):
 1. `call_operation list_metafield_definitions` and look for namespace `shopify`, key `handle`, owner type products.
 2. If missing, `call_write_operation create_metafield_definition`:
-   `{"body": {"namespace": "shopify", "key": "handle", "name": "Shopify handle", "description": "Technical marker set by the Shopify migration", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/single_line_text_field"}}`
+   `{"body": {"namespace": "shopify", "key": "handle", "name": "Handle Shopify", "description": "Marqueur technique posé par la migration Shopify", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/single_line_text_field"}}`
+   `name` and `description` are in the data language (here `fr`; `plan_shared.py` prints them). The namespace and key stay `shopify.handle` in every language.
 3. `state.py shared <dir> --key metafield_definition:shopify.handle --iri <iri> --status created|reused --module core`.
 
 ## Per product
