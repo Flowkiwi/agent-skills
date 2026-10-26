@@ -4,7 +4,20 @@ Flowkiwi skills for agent collaboration. Every skill lives in its own folder und
 
 ## Skills
 
-No skill yet. See [Add a skill to this repository](#add-a-skill-to-this-repository).
+| Skill                                                           | Use it to                                                                                                  | Validated with | Should work with (untested) |
+| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------- | --------------------------- |
+| [`shopify-catalog-migration`](skills/shopify-catalog-migration) | Rebuild a Shopify store catalog in a Flowkiwi tenant through the Flowkiwi MCP, from backoffice CSV exports | Claude Code    | Codex, Cursor, Gemini CLI   |
+
+"Should work with" means the skill only relies on the Agent Skills format, a shell and an MCP client, but nobody has run it with that agent yet. Please report what breaks.
+
+### shopify-catalog-migration
+
+- Ask your agent to migrate a Shopify catalog, for example "migrate the Shopify catalog of acme into Flowkiwi". The skill guides you through the Shopify exports, the consolidation questions and a dry-run before writing anything.
+- When the agent can spawn subagents (Claude Code, Cursor), products are created by parallel workers; otherwise they are created sequentially in the main session, which is slower and better split across sessions for large catalogs.
+- If the Flowkiwi MCP is not connected, the skill shows the setup for your agent (`references/setup.md`).
+
+> [!WARNING]
+> Migration workspaces are created in `migrations/<client-slug>/` under the current directory. They contain client data: keep them out of git.
 
 ## Install a skill
 
