@@ -334,6 +334,113 @@ class SummaryVerifyTest(unittest.TestCase):
         self.assertEqual(summary["verify_mismatch"], ["b"])
 
 
+def catalog_product(handle, variants=1, category=None, metafields=None, status="active", description=""):
+    return {"handle": handle, "title": handle, "product_category": category, "type": None, "status": status,
+            "description_html": description, "metafields": metafields or {},
+            "variants": [{"sku": f"{handle}-{i}"} for i in range(variants)]}
+
+
+class PilotAndSelectionTest(unittest.TestCase):
+    def setUp(self):
+        self.catalog = [
+            catalog_product("plain-1"), catalog_product("plain-2"), catalog_product("plain-3"),
+            catalog_product("sizes", variants=3, category="Apparel"),
+            catalog_product("syrup", metafields={"custom.ingredients": "Sugar"}),
+            catalog_product("old", status="archived"),
+            catalog_product("story", description="x" * 500),
+            catalog_product("plain-4"),
+        ]
+        self.state = state.init("acme", "u", {"products": self.catalog})
+
+    def test_representative_pilot_covers_features(self):
+        handles = [p["handle"] for p in self.catalog]
+        selected = state.pilot_selection(self.catalog, handles, 5)
+        self.assertEqual(len(selected), 5)
+        for handle in ("sizes", "syrup", "old", "story"):
+            self.assertIn(handle, selected)
+
+    def test_pilot_fills_in_order_and_respects_candidates(self):
+        selected = state.pilot_selection(self.catalog, ["plain-1", "plain-2", "plain-3"], 5)
+        self.assertEqual(selected, ["plain-1", "plain-2", "plain-3"])
+
+    def test_worklists_pilot_uses_products_and_default_limit(self):
+        lists = state.worklists(self.state, 1, None, True, products=self.catalog)
+        flat = lists[0]
+        self.assertEqual(len(flat), 5)
+        self.assertIn("sizes", flat)
+        self.assertEqual({h for h, p in self.state["products"].items() if p["pilot"]}, set(flat))
+
+    def test_new_pilot_clears_flags_of_products_not_created(self):
+        state.worklists(self.state, 1, None, True, handles=["plain-1", "plain-2"])
+        self.state["products"]["plain-1"]["status"] = "created"
+        state.worklists(self.state, 1, None, True, handles=["plain-3"])
+        pilots = {h for h, p in self.state["products"].items() if p["pilot"]}
+        self.assertEqual(pilots, {"plain-1", "plain-3"})
+
+    def test_explicit_handles(self):
+        lists = state.worklists(self.state, 2, None, False, handles=["old", "sizes", "old"])
+        self.assertEqual(sorted(h for l in lists for h in l), ["old", "sizes"])
+
+    def test_explicit_handles_errors(self):
+        with self.assertRaises(ValueError):
+            state.worklists(self.state, 1, None, False, handles=["nope"])
+        self.state["products"]["old"]["status"] = "failed"
+        with self.assertRaises(ValueError):
+            state.worklists(self.state, 1, None, False, handles=["old"])
+        self.assertEqual(state.worklists(self.state, 1, None, False, retry_failed=True, handles=["old"]), [["old"]])
+
+
+class SharedScopeTest(unittest.TestCase):
+    KEY = "metafield_definition:custom.ingredients"
+
+    def setUp(self):
+        self.state = state.init("acme", "u", products("a", "b"))
+        self.definition = iri("metafield_definitions", "ingredients")
+        state.record_shared(self.state, self.KEY, self.definition, "created", "metafields")
+        state.record_shared(self.state, "metafield_definition:custom.volume", iri("metafield_definitions", "volume"),
+                            "created", "metafields")
+        for handle in ("a", "b"):
+            state.merge(self.state, [{"handle": handle, "status": "created", "iri": iri("products", handle),
+                                      "error": None, "items": [
+                item("product", iri("products", handle)),
+                dict(item("metafield", iri("metafields", handle + "i"), module="metafields"), shared=self.KEY),
+                dict(item("metafield", iri("metafields", handle + "v"), module="metafields"),
+                     shared="metafield_definition:custom.volume"),
+            ]}])
+
+    def test_undo_plan_shared_scope(self):
+        plan = state.undo_plan(self.state, "shared:" + self.KEY)
+        self.assertEqual([s["iri"] for s in plan],
+                         [iri("metafields", "bi"), iri("metafields", "ai"), self.definition])
+
+    def test_unknown_scope(self):
+        for scope in ("everything", "shared:", "module:"):
+            with self.assertRaises(ValueError):
+                state.undo_plan(self.state, scope)
+
+    def test_shared_key_validation(self):
+        state.validate_result(line("a", items=[dict(item("metafield", iri("metafields", "x")), shared=self.KEY)]))
+        with self.assertRaises(ValueError):
+            state.validate_result(line("a", items=[dict(item("metafield", iri("metafields", "x")), shared="oops")]))
+
+    def test_redo_after_shared_undo(self):
+        self.assertEqual(state.worklists(self.state, 1, None, False, module="metafields"), [])
+        plan = state.undo_plan(self.state, "shared:" + self.KEY)
+        state.mark_deleted(self.state, [s["iri"] for s in plan])
+        self.assertEqual(self.state["shared"][self.KEY]["status"], "deleted")
+        self.assertEqual(self.state["products"]["a"]["status"], "created")
+        flat = sorted(h for l in state.worklists(self.state, 1, None, False, module="metafields") for h in l)
+        self.assertEqual(flat, ["a", "b"])
+        new_definition = iri("metafield_definitions", "ingredients-2")
+        state.record_shared(self.state, self.KEY, new_definition, "created", "metafields")
+        self.assertEqual(self.state["shared"][self.KEY]["iri"], new_definition)
+        state.merge(self.state, [{"handle": "a", "status": "created", "iri": iri("products", "a"), "error": None,
+                                  "module": "metafields", "items": [
+            dict(item("metafield", iri("metafields", "a2"), module="metafields"), shared=self.KEY)]}])
+        flat = [h for l in state.worklists(self.state, 1, None, False, module="metafields") for h in l]
+        self.assertEqual(flat, ["b"])
+
+
 class StateCliTest(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
@@ -398,6 +505,18 @@ class StateCliTest(unittest.TestCase):
         self.assertEqual(products_state[mine]["status"], "created")
         self.assertEqual(products_state[other]["status"], "pending")
         self.assertIn("0 result lines merged", run_cli("merge", self.dir).stdout)
+
+    def test_worklists_handles_error_keeps_worklists(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
+        run_cli("worklists", self.dir, "--workers", "1")
+        bad = run_cli("worklists", self.dir, "--handles", "a,zz", "--pilot")
+        self.assertEqual(bad.returncode, 1)
+        self.assertIn("zz", bad.stderr)
+        self.assertTrue(os.path.exists(os.path.join(self.dir, "worklists", "worker-1.json")))
+        good = run_cli("worklists", self.dir, "--handles", "b", "--pilot")
+        self.assertEqual(good.returncode, 0, good.stderr)
+        with open(os.path.join(self.dir, "worklists", "worker-1.json")) as f:
+            self.assertEqual(json.load(f), ["b"])
 
     def test_result_rejects_missing_keys(self):
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")

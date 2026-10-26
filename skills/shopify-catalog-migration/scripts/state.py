@@ -5,10 +5,10 @@ Usage:
   python3 state.py sync <dir>
   python3 state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module>
   python3 state.py decide <dir> --key <name> --value-json '<json>'
-  python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--retry-failed] [--module <name>]
+  python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--handles a,b] [--retry-failed] [--module <name>]
   python3 state.py result <results/worker-N.jsonl> --json '<line>' | --json - | --json-file <file>
   python3 state.py merge <dir>
-  python3 state.py undo-plan <dir> --scope all|pilot|module:<name>
+  python3 state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
   python3 state.py deleted <dir> --iris-file <file.json>
   python3 state.py reset-deleted <dir>
   python3 state.py summary <dir>
@@ -75,20 +75,88 @@ def decide(state, key, value):
     return state
 
 
-def worklists(state, workers, limit, pilot, retry_failed=False, module=None, titles=None):
-    """Split handles between workers; handles sharing a title go to the same worker (orphan rule safety)."""
+def _needs_module(product, module):
+    """No live item of the module, or a deleted one tied to a shared element (e.g. a metafield definition)
+    that has no live replacement yet."""
+    items = [i for i in product["items"] if i["module"] == module]
+    live = [i for i in items if i["status"] != "deleted"]
+    if not live:
+        return True
+    live_shared = {i.get("shared") for i in live}
+    return any(i["status"] == "deleted" and i.get("shared") and i["shared"] not in live_shared for i in items)
+
+
+def _features(product, longest):
+    features = {"multi_variant" if len(product.get("variants", [])) > 1 else "single_variant"}
+    features.add("category" if product.get("product_category") or product.get("type") else "no_category")
+    if any(v not in (None, "") for v in product.get("metafields", {}).values()):
+        features.add("metafields")
+    features.add(f"status:{product.get('status')}")
+    if product["handle"] == longest:
+        features.add("longest_description")
+    return features
+
+
+def pilot_selection(products, candidates, limit):
+    """Representative pilot: greedily cover multi/single variant, with/without category, metafields,
+    each source status and the longest description, then fill in order."""
+    eligible = set(candidates)
+    pool = [p for p in products if p["handle"] in eligible]
+    longest = max(pool, key=lambda p: len(p.get("description_html") or ""), default=None)
+    longest = longest["handle"] if longest and longest.get("description_html") else None
+    features = {p["handle"]: _features(p, longest) for p in pool}
+    wanted = ["multi_variant", "single_variant", "category", "no_category", "metafields"]
+    wanted += sorted({f for fs in features.values() for f in fs if f.startswith("status:")})
+    wanted.append("longest_description")
+    selected, covered = [], set()
+    for feature in wanted:
+        if len(selected) >= limit:
+            break
+        if feature in covered:
+            continue
+        options = [h for h in features if feature in features[h] and h not in selected]
+        if options:
+            best = max(options, key=lambda h: (len(features[h] - covered), -options.index(h)))
+            selected.append(best)
+            covered |= features[best]
+    for handle in candidates:
+        if len(selected) >= limit:
+            break
+        if handle not in selected:
+            selected.append(handle)
+    return selected
+
+
+def worklists(state, workers, limit, pilot, retry_failed=False, module=None, titles=None, handles=None,
+              products=None):
+    """Split handles between workers; handles sharing a title go to the same worker (orphan rule safety).
+    `handles` is an explicit selection, `products` (products.json entries) enables the representative pilot."""
     if module:
-        handles = [
-            h for h, p in state["products"].items()
-            if p["status"] == "created"
-            and not any(i["module"] == module and i["status"] != "deleted" for i in p["items"])
-        ]
+        candidates = [h for h, p in state["products"].items() if p["status"] == "created" and _needs_module(p, module)]
     else:
         wanted = {"pending", "failed"} if retry_failed else {"pending"}
-        handles = [h for h, p in state["products"].items() if p["status"] in wanted]
-    if limit is not None:
-        handles = handles[:limit]
+        candidates = [h for h, p in state["products"].items() if p["status"] in wanted]
+    if pilot and limit is None:
+        limit = 5
+    if handles:
+        eligible = set(candidates)
+        for handle in handles:
+            if handle not in state["products"]:
+                raise ValueError(f"unknown handle '{handle}'")
+            if handle not in eligible:
+                status = state["products"][handle]["status"]
+                hint = f"no {module} item missing" if module else "use --retry-failed for failed products"
+                raise ValueError(f"handle '{handle}' is {status}, not eligible ({hint})")
+        selection = list(dict.fromkeys(handles))
+    elif pilot and products:
+        selection = pilot_selection(products, candidates, limit)
+    else:
+        selection = candidates
+    handles = selection[:limit] if limit is not None else selection
     if pilot:
+        for product in state["products"].values():
+            if product["status"] != "created":
+                product["pilot"] = False
         for h in handles:
             state["products"][h]["pilot"] = True
     groups = {}
@@ -133,6 +201,8 @@ def validate_result(line):
         if item["status"] not in ITEM_STATUSES:
             raise ValueError(f"Item status must be one of {sorted(ITEM_STATUSES)}")
         _check_iri(item["iri"], link=str(item["kind"]).endswith("_link"))
+        if item.get("shared") is not None and (not isinstance(item["shared"], str) or ":" not in item["shared"]):
+            raise ValueError("Item shared must be a shared key like metafield_definition:custom.material")
 
 
 def append_result(path, line):
@@ -176,21 +246,32 @@ def _kind_rank(kind):
     return KIND_ORDER.index(kind) if kind in KIND_ORDER else len(KIND_ORDER)
 
 
+def check_scope(scope):
+    kind, _, name = scope.partition(":")
+    if scope in ("all", "pilot") or (kind in ("module", "shared") and name):
+        return scope
+    raise ValueError(f"Unknown undo scope '{scope}': use all, pilot, module:<name> or shared:<key>")
+
+
 def undo_plan(state, scope):
+    check_scope(scope)
     steps = []
     for handle, product in state["products"].items():
         if scope == "pilot" and not product["pilot"]:
             continue
         for item in product["items"]:
-            steps.append({"kind": item["kind"], "iri": item["iri"], "owner": handle,
-                          "status": item["status"], "module": item["module"]})
+            steps.append({"kind": item["kind"], "iri": item["iri"], "owner": handle, "status": item["status"],
+                          "module": item["module"], "shared": item.get("shared")})
     if scope != "pilot":
         for key, shared in state["shared"].items():
             steps.append({"kind": key.split(":", 1)[0], "iri": shared["iri"], "owner": key,
-                          "status": shared["status"], "module": shared["module"]})
+                          "status": shared["status"], "module": shared["module"], "shared": key})
     if scope.startswith("module:"):
         module = scope.split(":", 1)[1]
         steps = [s for s in steps if s["module"] == module]
+    if scope.startswith("shared:"):
+        key = scope.split(":", 1)[1]
+        steps = [s for s in steps if s["shared"] == key]
     steps = [s for s in steps if s["status"] == "created"]
     order = {id(s): i for i, s in enumerate(steps)}
     steps.sort(key=lambda s: (_kind_rank(s["kind"]), -order[id(s)]))
@@ -390,6 +471,7 @@ def main(argv):
     p.add_argument("--pilot", action="store_true")
     p.add_argument("--retry-failed", action="store_true")
     p.add_argument("--module")
+    p.add_argument("--handles", help="comma-separated explicit selection")
 
     p = sub.add_parser("result")
     p.add_argument("file")
@@ -450,13 +532,18 @@ def main(argv):
         merged = _merge_results(args.dir, state)
         _write_json(state_path, state)
         _archive_results(args.dir)
+        products_path = os.path.join(args.dir, "products.json")
+        products = _read_json(products_path)["products"] if os.path.exists(products_path) else []
+        titles = {p["handle"]: p.get("title") for p in products}
+        selection = [h.strip() for h in args.handles.split(",") if h.strip()] if args.handles else None
+        try:
+            lists = worklists(state, args.workers, args.limit, args.pilot, args.retry_failed, args.module, titles,
+                              selection, products)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         for path in glob.glob(os.path.join(args.dir, "worklists", "*.json")):
             os.remove(path)
-        products_path = os.path.join(args.dir, "products.json")
-        titles = {}
-        if os.path.exists(products_path):
-            titles = {p["handle"]: p.get("title") for p in _read_json(products_path)["products"]}
-        lists = worklists(state, args.workers, args.limit, args.pilot, args.retry_failed, args.module, titles)
         for i, handles in enumerate(lists, start=1):
             _write_json(os.path.join(args.dir, "worklists", f"worker-{i}.json"), handles)
         print(json.dumps({"merged_before": merged, "workers": len(lists), "products": sum(len(l) for l in lists)}))
@@ -466,7 +553,11 @@ def main(argv):
         _archive_results(args.dir)
         return 0
     elif args.command == "undo-plan":
-        print(json.dumps(undo_plan(state, args.scope), indent=2))
+        try:
+            print(json.dumps(undo_plan(state, args.scope), indent=2))
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         return 0
     elif args.command == "deleted":
         mark_deleted(state, _read_json(args.iris_file))

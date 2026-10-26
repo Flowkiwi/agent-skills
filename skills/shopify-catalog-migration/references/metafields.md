@@ -33,7 +33,7 @@ Flowkiwi definitions: `namespace`, `key`, `name` (3+ chars each), `ownerType` (`
 2. Shopify namespaces/keys shorter than 3 characters: propose a rename.
 3. Skip `shopify.*` standard metafields unless the developer wants them (they are often category metafields better handled by the taxonomy module).
 4. Value formats: Shopify CSV list values look like `["a","b"]` or `a; b`; normalize to the Flowkiwi expected format (check with one `create_metafield` on the pilot).
-5. **Validate every type explicitly**: show a table with one row per kept definition (`namespace.key`, name, Shopify type or `inferred`, proposed Flowkiwi type, value count) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values, then recreating them. Show the table again in the dry-run summary.
+5. **Validate every type explicitly**: show a table with one row per kept definition (`namespace.key`, name, Shopify type or `inferred`, proposed Flowkiwi type, value count) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values (`references/undo.md`, scope `shared:<key>`), then recreating them. Show the table again in the dry-run summary.
 6. Record with `state.py decide <dir> --key metafields --value-json '<json>'`: kept definitions with their Flowkiwi type and any value transform.
 
 ## Shared elements
@@ -45,7 +45,7 @@ For each kept definition: look up with `call_operation list_metafield_definition
 For each kept `namespace.key` with a non-empty value:
 1. `call_operation list_metafields` on `products/<id>`: a metafield with this definition exists -> record `reused`, skip.
 2. Else `call_write_operation create_metafield` `{"path": {"ownerResource": "products", "ownerId": <id>}, "body": {"definition": <iri>, "value": "<value>"}}`.
-3. Record a `metafield` item with module `metafields`.
+3. Record a `metafield` item with module `metafields` and `"shared": "metafield_definition:<namespace>.<key>"` (so `undo` scope `shared:<key>` can remove the values of one definition).
 
 ## Verify
 

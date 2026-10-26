@@ -73,6 +73,7 @@ Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Shared keys are `<kind>:<name>`, e.g. `category:T-shirts`, `supplier:Acme`, `metafield_definition:shopify.handle`.
 - Item kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `channel`, `country`.
+- Optional item key `shared`: the shared key the item depends on (`metafield_definition:custom.material` for a metafield). Used by the undo scope `shared:<key>`.
 - `*_link` items (`channel_link`, `collection_link`, `taxonomy_link`) record a relation set on the product, not a resource. Their IRI is `<product iri>#<relation>`. Undo removes the relation with `update_product`, or skips it when the product itself is deleted.
 
 ## Worker result line
@@ -88,7 +89,8 @@ Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names
 - every IRI is `/api/<resource>/<uuid>` (nested: `/api/<resource>/<uuid>/<sub>/<uuid>`), exactly as returned by the API;
 - `iri` is required when `status` is `created`;
 - only `*_link` items carry a `#<relation>` suffix (`#translations-<locale>` for translations), and they must;
-- item `status` is `created` or `reused`.
+- item `status` is `created` or `reused`;
+- optional item `shared` is a shared key (`<kind>:<name>`).
 
 `merge` validates again, then:
 - rejects a line from `results/worker-<n>.jsonl` whose handle is not in `worklists/worker-<n>.json` (when that worklist exists), or is unknown to the state;
@@ -104,10 +106,10 @@ python3 $S/state.py init <dir> --client acme --mcp-url https://...   # refuses i
 python3 $S/state.py sync <dir>                                       # new handles from products.json
 python3 $S/state.py decide <dir> --key status_mode --value-json '"draft"'
 python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/019f84f8-0000-7000-8000-000000000001 --status created --module taxonomy
-python3 $S/state.py worklists <dir> --workers 4 [--limit 5 --pilot] [--retry-failed] [--module prices]
+python3 $S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] [--retry-failed] [--module prices]
 python3 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 python3 $S/state.py merge <dir>
-python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>
+python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
 python3 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 python3 $S/state.py reset-deleted <dir>                              # deleted products back to pending
 python3 $S/state.py summary <dir>
@@ -123,6 +125,9 @@ python3 $S/verify.py <dir> <handle> --field description --readback-file <dir>/tm
 `verify.py` compares a read-back value with `products.json` after normalizing line endings, Unicode composition and outer whitespace, and prints both lengths, both SHA-256 and the first differing position with its context. `sample` lists ~`rate` of the handles (deterministic hash), every handle whose description holds special whitespace or non-ASCII punctuation, and the pilot products.
 
 `worklists` first merges any unmerged results, then writes fresh worklists. Products sharing the same title always go to the same worker, so the orphan rule can never adopt another worker's product.
+- `--handles a,b,c`: explicit selection (combine with `--pilot`). An unknown handle, or one that is not `pending` (`failed` too with `--retry-failed`; with `--module`, a created product missing that module), is an error and the previous worklists are kept.
+- `--pilot` without `--handles`: a representative selection of up to `--limit` products (default 5) covering, when present: several variants, a single variant, a category (`product_category` or `type`), no category, metafields, each source status, the longest description. The rest is filled in order. The `pilot` flag of products not `created` is cleared first, so only the new selection is flagged.
+- `--module <name>`: `created` products with no live item of that module, or whose items tied to a shared element (`"shared"` key) were deleted with no replacement yet.
 
 ## Resume rules
 
