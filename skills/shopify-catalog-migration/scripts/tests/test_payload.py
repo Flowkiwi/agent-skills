@@ -46,6 +46,17 @@ class PayloadTest(unittest.TestCase):
         self.assertEqual(payload.build(self.products, st, "cap")["product"]["body"]["status"],
                          "/api/statuses/ARCHIVED")
 
+    def test_status_map(self):
+        st = make_state(self.products, mode="shopify")
+        self.products["products"][0]["status"] = "unlisted"
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, st, "tshirt-basic")
+        state.decide(st, "status_map", {"unlisted": "DRAFT", "archived": "draft"})
+        self.assertEqual(payload.build(self.products, st, "tshirt-basic")["product"]["body"]["status"],
+                         "/api/statuses/DRAFT")
+        self.assertEqual(payload.build(self.products, st, "cap")["product"]["body"]["status"],
+                         "/api/statuses/DRAFT")
+
     def test_missing_status_mode_is_an_error(self):
         del self.state["decisions"]["status_mode"]
         with self.assertRaises(payload.PayloadError):

@@ -48,6 +48,8 @@ Optional `parent_title` column for nested collections.
 
 1. **Settings -> Custom data -> Products** (and **Variants** if used): for each definition, note name, `namespace.key` and type. Save as `exports/metafield-definitions.csv` with columns `owner,namespace_key,name,type`.
 2. When exporting products, the CSV includes metafield columns named `Label (product.metafields.<namespace>.<key>)`. If they are missing, re-export and make sure metafields are included.
+3. The product CSV export does not include every metafield type: `json` metafields are left out, and other types may be. After parsing, compare the declared definitions with the columns (`metafields.py diff`, `references/metafields.md`) and list the missing ones to the developer: get them another way (Shopify bulk editor, an app export) or accept they are not migrated.
+4. No definitions file (the developer cannot open Custom data)? `metafields.py infer` proposes one from the CSV columns.
 
 ## Translations (medium, ~10 min)
 

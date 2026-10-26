@@ -101,6 +101,60 @@ class ShopifyCsvTest(unittest.TestCase):
         self.assertIn(("short_option_name", "poster"), codes)
         self.assertIn(("duplicate_sku", "cap"), codes)
 
+    def test_metafield_column_labels(self):
+        self.assertEqual(self.data["metafield_columns"], {"custom.material": "Material"})
+
+
+def product(handle, price="0", sku=None, type_=None, status="active", options=(), row=2, **extra):
+    data = {"handle": handle, "row": row, "title": handle, "type": type_, "status": status,
+            "options": [{"name": n, "values": ["x"]} for n in options],
+            "variants": [{"sku": sku, "sku_generated": False, "barcode": "1", "price": price,
+                          "option_values": ["x"] * len(options)}], "metafields": {}}
+    data.update(extra)
+    return data
+
+
+def codes_of(products, code):
+    return [w for w in shopify_csv.validate({"products": products}) if w["code"] == code]
+
+
+class ValidateWarningsTest(unittest.TestCase):
+    def test_non_sellable(self):
+        products = [product("recipe", price="0.00"), product("empty", price=None), product("sold", price="5"),
+                    product("typed", type_="Syrup"), product("skued", sku="A-1")]
+        self.assertEqual([w["handle"] for w in codes_of(products, "non_sellable")], ["recipe", "empty"])
+
+    def test_generated_sku_does_not_make_sellable(self):
+        recipe = product("recipe")
+        recipe["variants"][0].update(sku="RECIPE-1", sku_generated=True)
+        self.assertTrue(shopify_csv.is_non_sellable(recipe))
+
+    def test_non_sellable_listed_once_per_product(self):
+        recipe = product("recipe")
+        recipe["variants"].append(dict(recipe["variants"][0]))
+        self.assertEqual(len(codes_of([recipe], "non_sellable")), 1)
+
+    def test_unknown_status(self):
+        warnings = codes_of([product("a", status="unlisted"), product("b", status="draft"),
+                             product("c", status=None)], "unknown_status")
+        self.assertEqual([w["handle"] for w in warnings], ["a"])
+        self.assertIn("unlisted", warnings[0]["message"])
+
+    def test_option_name_case(self):
+        products = [product("a", options=["Size"]), product("b", options=["Size"]),
+                    product("c", options=["size"], row=9), product("d", options=["SIZE"]),
+                    product("e", options=["Color"])]
+        warnings = codes_of(products, "option_name_case")
+        self.assertEqual([(w["handle"], w["row"]) for w in warnings], [("c", 9), ("d", 2)])
+        self.assertIn("use 'Size'", warnings[0]["message"])
+        self.assertIn("'Size': 2", warnings[0]["message"])
+
+    def test_format_warnings_puts_non_sellable_first_with_hint(self):
+        warnings = shopify_csv.validate({"products": [product("recipe")]})
+        text = shopify_csv.format_warnings(warnings)
+        self.assertTrue(text.startswith("non_sellable (1)"))
+        self.assertIn("missing_sku", text.split("\n")[2])
+
 
 if __name__ == "__main__":
     unittest.main()

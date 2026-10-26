@@ -12,23 +12,26 @@ The Shopify product CSV only (`references/collect.md`).
 
 ## Map and consolidate
 
-| Shopify (`products.json`)    | Flowkiwi                                                                      |
-| ---------------------------- | ----------------------------------------------------------------------------- |
-| `title`                      | `create_product` `title` (max 255)                                            |
-| `description_html`           | `description` (HTML kept as is; omit when null, `minLength` is 1)             |
-| `tags`                       | `tags`: joined with `,` without spaces; omit when empty                       |
-| `status`                     | `status`: `/api/statuses/DRAFT` when `status_mode` is `draft`, else `active` -> `ACTIVE`, `draft` -> `DRAFT`, `archived` -> `ARCHIVED` |
-| `options[].name`             | `create_product_option` `title` (min 3 chars), `position` = index             |
-| `options[].values[]`         | `create_option_value` `value`, `productOption`, `position` = index            |
-| `variants[]`                 | `create_variant` `sku`, `barcode` (both required)                             |
-| `variants[].option_values`   | `create_variant` `optionValues[]` (IRIs of the matching option values)        |
-| `handle`                     | marker metafield `shopify.handle` on the product                              |
+| Shopify (`products.json`)  | Flowkiwi                                                                                                                                                                  |
+| -------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `title`                    | `create_product` `title` (max 255)                                                                                                                                        |
+| `description_html`         | `description` (HTML kept as is; omit when null, `minLength` is 1)                                                                                                         |
+| `tags`                     | `tags`: joined with `,` without spaces; omit when empty                                                                                                                   |
+| `status`                   | `status`: `/api/statuses/DRAFT` when `status_mode` is `draft`, else `decisions.status_map` first, then `active` -> `ACTIVE`, `draft` -> `DRAFT`, `archived` -> `ARCHIVED` |
+| `options[].name`           | `create_product_option` `title` (min 3 chars), `position` = index                                                                                                         |
+| `options[].values[]`       | `create_option_value` `value`, `productOption`, `position` = index                                                                                                        |
+| `variants[]`               | `create_variant` `sku`, `barcode` (both required)                                                                                                                         |
+| `variants[].option_values` | `create_variant` `optionValues[]` (IRIs of the matching option values)                                                                                                    |
+| `handle`                   | marker metafield `shopify.handle` on the product                                                                                                                          |
 
 `payload.py` applies this table: workers copy its output instead of mapping by hand. The table stays for the dry-run and for review.
 
 Not migrated by core: images (kept in `products.json`), variant weight (`grams`: Flowkiwi variants have no weight field). Say it once in the dry-run.
 
-Consolidation questions, one at a time. Renames and skips go into `fixes.json` (`references/state.md`), never into `products.json` directly:
+Consolidation questions, one at a time, in this order. Renames and skips go into `fixes.json` (`references/state.md`), never into `products.json` directly:
+- **non_sellable** first (no price, no Shopify SKU, no type: recipes, content pages, samples stored as products). They also raise `missing_sku` and often `missing_barcode`, so settle them before anything else. Show the count and a few examples (title, handle, metafields), and ask whether to skip them all with one rule: `"skip_rules": [{"non_sellable": true}]`. Other rules match a metafield prefix (`{"metafield_prefix": "custom.recipe_"}`) or a handle pattern (`{"handle_pattern": "^recipe-"}`); a product matching any rule is skipped. `codes.py fix` prints how many products each rule skipped; run `state.py sync` after.
+- **unknown_status** (e.g. `unlisted`): only matters when `status_mode` is `shopify`. Ask the Flowkiwi status for each unknown value and record `state.py decide <dir> --key status_map --value-json '{"unlisted": "DRAFT"}'` (`payload.py` applies it).
+- **option_name_case** (`Size` vs `size` across products): propose the majority form given in the warning, as an `option_names` fix for every product (`{"option_names": {"*": {"size": "Size"}}}`) or per handle.
 - **duplicate_sku**: SKUs must be unique. Show both products; the developer picks: rename one (`skus` fix, e.g. suffix `-2`), or skip a product (`skip` fix).
 - **short_option_name**: Flowkiwi needs 3+ characters. Propose a rename (`Sz` -> `Size`) as an `option_names` fix.
 - **missing_sku / missing_barcode**: `codes.py preview` then `codes.py fill` (SKILL.md Phase 2 step 5). Default barcode: EAN-13, prefix `2`, sequential. Default SKU pattern: `{handle}-{index}`, uppercased.

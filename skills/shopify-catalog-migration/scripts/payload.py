@@ -57,10 +57,10 @@ def status_iri(product, decisions):
     if mode == "draft":
         return "/api/statuses/DRAFT"
     status = product.get("status")
-    code = STATUSES.get(status)
+    code = decisions.get("status_map", {}).get(status) or STATUSES.get(status)
     if code is None:
-        raise PayloadError(f"Shopify status '{status}' has no mapping")
-    return f"/api/statuses/{code}"
+        raise PayloadError(f"Shopify status '{status}' has no mapping: record it in decision 'status_map'")
+    return code if code.startswith("/api/statuses/") else f"/api/statuses/{code.upper()}"
 
 
 def product_body(product, state):

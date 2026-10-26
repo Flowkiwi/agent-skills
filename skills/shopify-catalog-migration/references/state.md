@@ -20,7 +20,7 @@ All script commands below take the workspace folder as `<dir>`.
 
 ## products.json
 
-`{"products": [...], "warnings": [...]}`. One product entry per Shopify handle (`row` is the first CSV line of the product):
+`{"products": [...], "warnings": [...], "metafield_columns": {"custom.material": "Material"}}` (`metafield_columns`: label of each metafield column of the export, absent from older files). One product entry per Shopify handle (`row` is the first CSV line of the product):
 
 ```json
 {
@@ -36,7 +36,7 @@ All script commands below take the workspace folder as `<dir>`.
 }
 ```
 
-Warning entry: `{"row": 7, "handle": "cap", "code": "duplicate_sku", "message": "SKU 'TS-S' already used by 'tshirt-basic'"}`. Codes: `duplicate_sku`, `missing_sku`, `missing_barcode`, `short_option_name`, `orphan_row` (only at parse time). `shopify_csv.py --validate products.json` recomputes them after fixes.
+Warning entry: `{"row": 7, "handle": "cap", "code": "duplicate_sku", "message": "SKU 'TS-S' already used by 'tshirt-basic'"}`. Codes: `non_sellable` (every variant price 0 or empty, no Shopify SKU, no `type`; printed first), `unknown_status` (not `active`, `draft` or `archived`, e.g. `unlisted`), `option_name_case` (same option name differing only by case across products, one warning per minority form), `duplicate_sku`, `missing_sku`, `missing_barcode`, `short_option_name`, `orphan_row` (only at parse time). `shopify_csv.py --validate products.json` recomputes them after fixes.
 
 Not migrated, but kept: `images` (no media creation through the MCP), `grams` (Flowkiwi variants have no weight field), `published` / `vendor` / `type` unless a module uses them.
 
@@ -45,10 +45,11 @@ Not migrated, but kept: `images` (no media creation through the MCP), `grams` (F
 Every consolidation change, so it can be replayed on a new export:
 
 ```json
-{"skus": {"cap": {"TS-S": "TS-S-2"}}, "option_names": {"poster": {"Sz": "Size"}}, "skip": ["old-product"]}
+{"skus": {"cap": {"TS-S": "TS-S-2"}}, "option_names": {"poster": {"Sz": "Size"}, "*": {"size": "Size"}},
+ "skip": ["old-product"], "skip_rules": [{"non_sellable": true}, {"metafield_prefix": "custom.recipe_"}, {"handle_pattern": "^recipe-"}]}
 ```
 
-Applied with `codes.py fix products.json fixes.json` (idempotent).
+Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names` under `*` apply to every product (a handle entry wins). A product matching any of `skip_rules` is skipped; the conditions inside one rule must all match. `fix` prints how many products each rule skipped.
 
 ## state.json
 
@@ -67,6 +68,7 @@ Applied with `codes.py fix products.json fixes.json` (idempotent).
 - Product status: `pending`, `created`, `failed`, `deleted`, `skipped` (handle no longer in `products.json`; back to `pending` if it reappears).
 - `module_errors`: `{"<module>": "<error>"}` from module-only runs; they never change the product status.
 - `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
+- `decisions.status_map`: `{"<shopify status>": "<Flowkiwi status code>"}`, e.g. `{"unlisted": "DRAFT"}`, applied before the default mapping when `status_mode` is `shopify`.
 - `decisions.adopt`: `{"<handle>": "<tenant product IRI>"}` for Shopify products mapped to an existing tenant product during consolidation.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Shared keys are `<kind>:<name>`, e.g. `category:T-shirts`, `supplier:Acme`, `metafield_definition:shopify.handle`.
@@ -110,6 +112,8 @@ python3 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.jso
 python3 $S/state.py reset-deleted <dir>                              # deleted products back to pending
 python3 $S/state.py summary <dir>
 python3 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|all] [--dry-run]
+python3 $S/metafields.py infer products.json [--output exports/metafield-definitions.csv]
+python3 $S/metafields.py diff products.json exports/metafield-definitions.csv
 python3 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
 python3 $S/verify.py <dir> <handle> --field description --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
 ```

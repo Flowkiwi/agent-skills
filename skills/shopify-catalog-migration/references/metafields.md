@@ -8,30 +8,33 @@ Medium to high: ~10-20 min to note the definitions and decide the type mapping.
 
 - `exports/metafield-definitions.csv` (`owner,namespace_key,name,type`) from Settings -> Custom data.
 - Values: `metafields` in `products.json` (product-level columns of the CSV). Variant metafields are not in the product CSV: out of scope unless the developer provides them.
+- The product CSV export does not include `json` metafields, and may omit other types. Run `python3 $SKILL/scripts/metafields.py diff products.json exports/metafield-definitions.csv`: it lists declared definitions without a column (and columns without a definition). Show the missing ones: the developer gets their values another way (Shopify bulk editor, an app export) or accepts they are not migrated.
+- Fallback without a definitions file: `python3 $SKILL/scripts/metafields.py infer products.json --output exports/metafield-definitions.csv` proposes one definition per metafield column (label as name, value count, suggested type from the values: newlines, HTML, integers, decimals, JSON, `["a","b"]` lists, length). The file then holds Flowkiwi type names directly; every type still needs the developer's validation.
 
 ## Map and consolidate
 
-Flowkiwi definitions: `namespace`, `key`, `name` (3+ chars each), `ownerType` (`/api/metafield_owner_types/products`), `type` (`/api/metafield_definition_types/<type>`). Check the current list with `call_operation list_metafield_definition_types`.
+Flowkiwi definitions: `namespace`, `key`, `name` (3+ chars each), `ownerType` (`/api/metafield_owner_types/products`), `type` (`/api/metafield_definition_types/<type>`). Check the current list with `call_operation list_metafield_definition_types`, without pagination arguments (it rejects `itemsPerPage`).
 
-| Shopify type                       | Flowkiwi type                     |
-| ---------------------------------- | --------------------------------- |
-| `single_line_text_field`           | `single_line_text_field`          |
-| `multi_line_text_field`            | `multi_line_text_field`           |
-| `rich_text_field`                  | `json` (ask) or `multi_line_text_field` |
-| `number_integer`                   | `number_integer`                  |
-| `number_decimal`                   | `number_decimal`                  |
-| `json`                             | `json`                            |
+| Shopify type                                                                          | Flowkiwi type                                                                                    |
+| ------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `single_line_text_field`                                                              | `single_line_text_field`                                                                         |
+| `multi_line_text_field`                                                               | `multi_line_text_field`                                                                          |
+| `rich_text_field`                                                                     | `json` (ask) or `multi_line_text_field`                                                          |
+| `number_integer`                                                                      | `number_integer`                                                                                 |
+| `number_decimal`                                                                      | `number_decimal`                                                                                 |
+| `json`                                                                                | `json`                                                                                           |
 | `boolean`, `date`, `url`, `color`, `weight`, `dimension`, `volume`, `rating`, `money` | no direct type: propose `single_line_text_field` (or `json` for measures), the developer decides |
-| `list.single_line_text_field`      | `list__single_line_text_field`    |
-| `list.number_integer` / `list.number_decimal` | `list__number_integer` / `list__number_decimal` |
-| `product_reference`, `list.product_reference` | out of scope unless asked (needs the Flowkiwi IRIs of the targets, run after all products) |
-| `metaobject_reference`, `file_reference`, other references | out of scope (no media, metaobjects need their own migration) |
+| `list.single_line_text_field`                                                         | `list__single_line_text_field`                                                                   |
+| `list.number_integer` / `list.number_decimal`                                         | `list__number_integer` / `list__number_decimal`                                                  |
+| `product_reference`, `list.product_reference`                                         | out of scope unless asked (needs the Flowkiwi IRIs of the targets, run after all products)       |
+| `metaobject_reference`, `file_reference`, other references                            | out of scope (no media, metaobjects need their own migration)                                    |
 
 1. Join definitions and value columns on `namespace.key`; report columns without a definition and definitions without values.
 2. Shopify namespaces/keys shorter than 3 characters: propose a rename.
 3. Skip `shopify.*` standard metafields unless the developer wants them (they are often category metafields better handled by the taxonomy module).
 4. Value formats: Shopify CSV list values look like `["a","b"]` or `a; b`; normalize to the Flowkiwi expected format (check with one `create_metafield` on the pilot).
-5. Record with `state.py decide <dir> --key metafields --value-json '<json>'`: kept definitions with their Flowkiwi type and any value transform.
+5. **Validate every type explicitly**: show a table with one row per kept definition (`namespace.key`, name, Shopify type or `inferred`, proposed Flowkiwi type, value count) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values, then recreating them. Show the table again in the dry-run summary.
+6. Record with `state.py decide <dir> --key metafields --value-json '<json>'`: kept definitions with their Flowkiwi type and any value transform.
 
 ## Shared elements
 
