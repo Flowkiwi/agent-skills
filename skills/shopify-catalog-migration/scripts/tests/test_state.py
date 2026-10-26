@@ -518,6 +518,27 @@ class StateCliTest(unittest.TestCase):
         with open(os.path.join(self.dir, "worklists", "worker-1.json")) as f:
             self.assertEqual(json.load(f), ["b"])
 
+    def test_shared_file_and_decide_value_file(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
+        shared_file = os.path.join(self.dir, "shared.json")
+        entries = [{"key": "category:Drinks", "iri": iri("categories", "d"), "status": "created", "module": "taxonomy"},
+                   {"key": "supplier:Acme", "iri": iri("suppliers", "a"), "status": "reused", "module": "costs"}]
+        with open(shared_file, "w") as f:
+            json.dump(entries, f)
+        self.assertEqual(run_cli("shared", self.dir, "--file", shared_file).returncode, 0)
+        with open(shared_file, "w") as f:
+            json.dump([{"key": "category:Bad", "iri": iri("categories", "b"), "status": "deleted", "module": "x"}], f)
+        self.assertEqual(run_cli("shared", self.dir, "--file", shared_file).returncode, 1)
+        self.assertEqual(run_cli("shared", self.dir, "--key", "category:X").returncode, 1)
+        value_file = os.path.join(self.dir, "taxonomy.json")
+        with open(value_file, "w") as f:
+            json.dump({"categories": [], "products": {}}, f)
+        self.assertEqual(run_cli("decide", self.dir, "--key", "taxonomy", "--value-file", value_file).returncode, 0)
+        with open(os.path.join(self.dir, "state.json")) as f:
+            saved = json.load(f)
+        self.assertEqual(sorted(saved["shared"]), ["category:Drinks", "supplier:Acme"])
+        self.assertEqual(saved["decisions"]["taxonomy"], {"categories": [], "products": {}})
+
     def test_result_rejects_missing_keys(self):
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
         self.assertNotEqual(run_cli("result", result_file, "--json", '{"handle": "a"}').returncode, 0)

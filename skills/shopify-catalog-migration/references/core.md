@@ -40,7 +40,7 @@ Consolidation questions, one at a time, in this order. Renames and skips go into
 
 ## Shared elements
 
-The marker definition, before any product:
+The marker definition, before any product (first entry of `plan_shared.py`):
 1. `call_operation list_metafield_definitions` and look for namespace `shopify`, key `handle`, owner type products.
 2. If missing, `call_write_operation create_metafield_definition`:
    `{"body": {"namespace": "shopify", "key": "handle", "name": "Shopify handle", "description": "Technical marker set by the Shopify migration", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/single_line_text_field"}}`
@@ -58,7 +58,7 @@ The worker runs this for each handle of its worklist, in order. Every item creat
 2. **Adopted product**: if `decisions.adopt[<handle>]` exists (the developer chose to map this handle to an existing tenant product during consolidation), use that product: write the marker (step 6) if missing, record the product `reused`, continue at step 7.
 3. **Find by marker**: `list_products` with `query.metafield["shopify.handle"] = <handle>`. Found: record it per the created/reused rule above and only create what is missing (compare options, variants by SKU).
 4. **Orphan lookup**, always when the marker lookup found nothing (a previous worker may have died between creating the product and writing its marker): `list_products` with `query.title = <title>` and `query["createdAt[after]"] = <date part of started_at>`. Keep only candidates whose title is **exactly** equal and whose `createdAt` timestamp is at or after `started_at`, then check their metafields (`call_operation list_metafields` on `products/<id>`). A candidate **without** a `shopify.handle` metafield is an orphan of this migration: adopt it (record `created`) and continue at step 6. More than one candidate: fail this product and report it (the developer decides).
-5. **Create the product**: `call_write_operation create_product` with the payload `product.body`, plus the product-level fields of the module sections (category, channels, collections, attributes). **On error or timeout, do not retry blindly**: run the orphan lookup (step 4) first; retry the creation once only if it finds nothing.
+5. **Create the product**: `call_write_operation create_product` with the payload `product.body` (it already holds `category` and `attributes` when the taxonomy module is chosen), plus the product-level fields of the other module sections (channels, collections). **On error or timeout, do not retry blindly**: run the orphan lookup (step 4) first; retry the creation once only if it finds nothing.
 6. **Marker**: `call_write_operation create_metafield` with `path {"ownerResource": "products", "ownerId": <id>}` and the payload `marker.body`. The value is translatable: never pass `locale`, so it is written and looked up in the tenant default locale. Record `metafield` with `"shared": "metafield_definition:shopify.handle"` (the payload `marker.shared`).
 7. **Options**: `list_product_options` on the product first (after an adoption or a partial failure some exist). For each missing option of the payload `options`, `create_product_option` (`path.productId`, `title`, `position`), then `create_option_value` per missing value (`value`, `position`, `productOption` = the option IRI). Record `product_option` and `option_value` items.
 8. **Variants**: for each variant of the payload `variants`, `list_variants` with `query.sku = <sku>` (partial match: only a returned `sku` exactly equal counts): on this product, record it per the created/reused rule; on another product, fail this product with a clear error. Else `create_variant` (`path.productId`, `sku`, `barcode`, `optionValues` = IRIs of the option values named in `option_values`, the n-th name belonging to the n-th option). Record `variant`. Keep a map `sku -> variant IRI` for the module sections.
@@ -96,6 +96,7 @@ Rules:
 - Build every MCP argument from `python3 {{SKILL}}/scripts/payload.py {{DIR}} <handle>`: copy values verbatim, never retype them from products.json, never fix spelling or whitespace, keep `\uXXXX` escapes as is in the JSON arguments.
 - Write helper and temporary files only in {{WORK_DIR}} (`mkdir -p` it first), never in a shared scratch dir, always with a quoted heredoc (`<<'EOF'`). Never name shell variables `path`, `PATH`, `HOME` or other environment names.
 - Look up before every creation. After any error or timeout on a write, look up before retrying. Never create duplicates.
+- On `rate limit exceeded` (HTTP 429): wait with `sleep 5`, then `sleep 15`, then `sleep 45` between attempts, and always look up before retrying a write (the first attempt may have gone through). Still limited after that: fail the product and go on.
 - Never modify or delete anything you did not create in this run, except adopting an orphan as described.
 - Never create media. Never search for bulk operations.
 - One product failing never stops the others.
@@ -108,7 +109,21 @@ Module sections:
 {{MODULE_SECTIONS}}
 ````
 
-`{{CORE_PER_PRODUCT}}` is the mapping table of `## Map and consolidate` followed by the `## Per product` section above (omit both in `module-only` mode), with `$SKILL` replaced by the skill path. `{{MODULE_SECTIONS}}` is, for each chosen module in menu order, its mapping or conversion rules followed by its `## Per product` section. Workers only see this prompt: anything they need to compute a payload must be in it.
+`{{CORE_PER_PRODUCT}}` is the mapping table of `## Map and consolidate` followed by the `## Per product` section above (omit both in `module-only` mode), with `$SKILL` replaced by the skill path. `{{MODULE_SECTIONS}}` is, for each chosen module in menu order, its `## Per product` section, preceded by its mapping or conversion rules only for the modules `payload.py` does not handle (prices, costs-suppliers, channels, collections, translations); taxonomy and metafields values come from `payload.py`. Workers only see this prompt: anything they need to compute a payload must be in it.
+
+## Shared elements worker
+
+The shared elements can be created in the main session, or by one dedicated worker (never several: categories depend on their parents). Prompt:
+
+````
+You create the shared elements of a Shopify -> Flowkiwi catalog migration through the Flowkiwi MCP tools (search_operations / describe_operation / call_operation / call_write_operation; your client may prefix their names). The developer already approved the plan: do not ask questions, do not change anything in it.
+
+Loop until the plan is empty:
+1. python3 {{SKILL}}/scripts/plan_shared.py {{DIR}} --ready
+2. For each entry, in order: look up first as its "lookup" says (an exact match found: status "reused", its @id); else call_write_operation with the entry's "operation", "path" when present and "body" copied verbatim (keep \uXXXX escapes): status "created", the @id returned. On error or timeout, look up before retrying once. On `rate limit exceeded` (HTTP 429), wait with `sleep 5`, `sleep 15`, `sleep 45` and look up before retrying.
+3. Write [{"key", "iri", "status", "module"}, ...] for the entries done to {{WORK_DIR}}/shared.json with a quoted heredoc (<<'EOF'), then python3 {{SKILL}}/scripts/state.py shared {{DIR}} --file {{WORK_DIR}}/shared.json
+Write temporary files only in {{WORK_DIR}}. Never modify or delete tenant items. When done, reply with 3 lines only: created count, reused count, failed keys with a short reason.
+````
 
 ## Verify
 

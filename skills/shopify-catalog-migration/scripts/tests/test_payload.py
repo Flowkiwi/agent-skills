@@ -83,12 +83,70 @@ class PayloadTest(unittest.TestCase):
         result = payload.build(self.products, self.state, "mug", step="variants")
         self.assertEqual(set(result), {"handle", "variants"})
 
-    def test_metafields_need_a_recorded_definition(self):
+    def test_metafields_follow_the_decision(self):
         self.assertEqual(payload.build(self.products, self.state, "tshirt-basic")["metafields"], [])
+        state.decide(self.state, "metafields", {"definitions": {"custom.material": {"type": "single_line_text_field",
+                                                                                     "transform": None}}})
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, self.state, "tshirt-basic")
         state.record_shared(self.state, "metafield_definition:custom.material", MATERIAL, "created", "metafields")
         metafields = payload.build(self.products, self.state, "tshirt-basic")["metafields"]
         self.assertEqual(metafields, [{"key": "custom.material", "shared": "metafield_definition:custom.material",
                                        "body": {"definition": MATERIAL, "value": "Cotton"}}])
+        self.assertEqual(payload.build(self.products, self.state, "mug")["metafields"], [])
+
+    def test_renamed_metafield_reads_its_source(self):
+        state.decide(self.state, "metafields", {"definitions": {"custom.fabric": {
+            "type": "single_line_text_field", "source": "custom.material"}}})
+        state.record_shared(self.state, "metafield_definition:custom.fabric", MATERIAL, "created", "metafields")
+        (entry,) = payload.build(self.products, self.state, "tshirt-basic")["metafields"]
+        self.assertEqual((entry["key"], entry["body"]["value"]), ("custom.fabric", "Cotton"))
+
+    def test_module_decisions_must_be_machine_readable(self):
+        state.decide(self.state, "modules", ["core", "taxonomy"])
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, self.state, "mug")
+        state.decide(self.state, "taxonomy", {"tree": "free text"})
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, self.state, "mug")
+
+    def test_metafield_transforms(self):
+        self.assertEqual(payload.transform_value('["a", "b"]', "list_json"), '["a", "b"]')
+        self.assertEqual(payload.transform_value("a; b\nc", "list"), ["a", "b", "c"])
+        self.assertEqual(payload.transform_value("12", "number"), 12)
+        self.assertEqual(payload.transform_value("1,5", "number"), 1.5)
+        self.assertEqual(payload.transform_value('{"a": 1}', "json"), {"a": 1})
+        self.assertEqual(payload.transform_value("<p>A &amp; B</p><p>C<br>D</p>", "strip_html"), "A & B\nC\nD")
+        self.assertEqual(payload.transform_value("as is", None), "as is")
+        for value, transform in (("x", "number"), ("{", "json"), ("x", "upper")):
+            with self.assertRaises(payload.PayloadError):
+                payload.transform_value(value, transform)
+
+    def test_taxonomy_fields(self):
+        decision = {"categories": [{"path": "Apparel", "name": "Apparel", "parent": None}],
+                    "products": {"tshirt-basic": "Apparel"},
+                    "attributes": [{"code": "fit", "name": "Fit", "type": "list", "multiple": True,
+                                    "categories": ["Apparel"], "options": [{"value": "Slim"}, {"value": "Loose"}],
+                                    "values": {"tshirt-basic": ["Slim", "Loose"]}},
+                                   {"code": "care", "name": "Care", "type": "string", "multiple": False,
+                                    "categories": ["Apparel"], "values": {"tshirt-basic": ["30C"]}}]}
+        state.decide(self.state, "taxonomy", decision)
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, self.state, "tshirt-basic")
+        dry = payload.build(self.products, self.state, "tshirt-basic", placeholders=True)["product"]["body"]
+        self.assertEqual(dry["category"], "<category:Apparel IRI>")
+        shared = {"category:Apparel": "/api/categories/c", "attribute_definition:fit": "/api/attribute_definitions/f",
+                  "attribute_option:fit:Slim": "/api/attribute_options/s",
+                  "attribute_option:fit:Loose": "/api/attribute_options/l",
+                  "attribute_definition:care": "/api/attribute_definitions/c"}
+        for key, value in shared.items():
+            state.record_shared(self.state, key, value, "created", "taxonomy")
+        fields = payload.build(self.products, self.state, "tshirt-basic", step="taxonomy")["taxonomy"]
+        self.assertEqual(fields, {"category": "/api/categories/c", "attributes": [
+            {"definition": "/api/attribute_definitions/f", "option": "/api/attribute_options/s"},
+            {"definition": "/api/attribute_definitions/f", "option": "/api/attribute_options/l"},
+            {"definition": "/api/attribute_definitions/c", "value": "30C"}]})
+        self.assertNotIn("category", payload.build(self.products, self.state, "mug")["product"]["body"])
 
     def test_unknown_handle(self):
         with self.assertRaises(payload.PayloadError):

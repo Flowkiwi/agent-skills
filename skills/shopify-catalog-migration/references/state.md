@@ -68,6 +68,7 @@ Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names
 - Product status: `pending`, `created`, `failed`, `deleted`, `skipped` (handle no longer in `products.json`; back to `pending` if it reappears).
 - `module_errors`: `{"<module>": "<error>"}` from module-only runs; they never change the product status.
 - `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
+- `decisions.taxonomy` and `decisions.metafields`: machine-readable formats in `references/taxonomy.md` and `references/metafields.md`, read by `payload.py` and `plan_shared.py`.
 - `decisions.status_map`: `{"<shopify status>": "<Flowkiwi status code>"}`, e.g. `{"unlisted": "DRAFT"}`, applied before the default mapping when `status_mode` is `shopify`.
 - `decisions.adopt`: `{"<handle>": "<tenant product IRI>"}` for Shopify products mapped to an existing tenant product during consolidation.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
@@ -105,7 +106,9 @@ S=$SKILL/scripts
 python3 $S/state.py init <dir> --client acme --mcp-url https://...   # refuses if state.json exists
 python3 $S/state.py sync <dir>                                       # new handles from products.json
 python3 $S/state.py decide <dir> --key status_mode --value-json '"draft"'
+python3 $S/state.py decide <dir> --key taxonomy --value-file taxonomy.json
 python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/019f84f8-0000-7000-8000-000000000001 --status created --module taxonomy
+python3 $S/state.py shared <dir> --file <dir>/tmp/shared/shared.json        # [{"key", "iri", "status", "module"}, ...]
 python3 $S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] [--retry-failed] [--module prices]
 python3 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 python3 $S/state.py merge <dir>
@@ -113,14 +116,21 @@ python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
 python3 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 python3 $S/state.py reset-deleted <dir>                              # deleted products back to pending
 python3 $S/state.py summary <dir>
-python3 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|all] [--dry-run]
+python3 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|all] [--dry-run]
+python3 $S/plan_shared.py <dir> [--ready]
+python3 $S/taxonomy.py preview products.json --source product_category|type [--map m.json] [--drop-root] [--depth 2] [--rename 'Old path=New name'] [--attribute <key>] [--no-attributes]
+python3 $S/taxonomy.py build products.json --source ... <same options> --output taxonomy.json
 python3 $S/metafields.py infer products.json [--output exports/metafield-definitions.csv]
 python3 $S/metafields.py diff products.json exports/metafield-definitions.csv
 python3 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
 python3 $S/verify.py <dir> <handle> --field description --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
 ```
 
-`payload.py` prints the exact MCP bodies of one product (status from `status_mode`, tags joined with `,`, marker, options with positions, variants with their option value names, metafields whose definition is recorded in `shared`). Non-ASCII letters stay literal; invisible or special whitespace characters are printed as `\uXXXX` escapes. A missing decision or shared IRI is an error (`--dry-run`: a `<key IRI>` placeholder).
+`payload.py` prints the exact MCP bodies of one product (status from `status_mode`, tags joined with `,`, marker, options with positions, variants with their option value names, metafields whose definition is recorded in `shared`). Non-ASCII letters stay literal; invisible or special whitespace characters are printed as `\uXXXX` escapes. With the taxonomy module, the product body holds `category` and `attributes` from `decisions.taxonomy`; with the metafields module, `metafields` follows `decisions.metafields` (transform applied). A missing decision or shared IRI is an error (`--dry-run`: a `<key IRI>` placeholder).
+
+`plan_shared.py` prints the shared elements to create, in order, with `key`, `module`, `operation`, `lookup`, `path`, `body` and `depends_on` (keys not recorded yet, shown as `<key IRI>` placeholders in the body). Keys recorded `created` or `reused` are skipped; `deleted` ones are planned again. `--ready`: only the entries with no pending dependency. `state.py shared --file` checks every entry before recording any.
+
+`taxonomy.py` (`references/taxonomy.md`): `preview` prints the trimmed tree with product counts, products without category with a suggestion, tag attribute candidates and the category count; `build` writes the `decisions.taxonomy` file.
 
 `verify.py` compares a read-back value with `products.json` after normalizing line endings, Unicode composition and outer whitespace, and prints both lengths, both SHA-256 and the first differing position with its context. `sample` lists ~`rate` of the handles (deterministic hash), every handle whose description holds special whitespace or non-ASCII punctuation, and the pilot products.
 

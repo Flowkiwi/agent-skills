@@ -29,23 +29,25 @@ Flowkiwi definitions: `namespace`, `key`, `name` (3+ chars each), `ownerType` (`
 | `product_reference`, `list.product_reference`                                         | out of scope unless asked (needs the Flowkiwi IRIs of the targets, run after all products)       |
 | `metaobject_reference`, `file_reference`, other references                            | out of scope (no media, metaobjects need their own migration)                                    |
 
-1. Join definitions and value columns on `namespace.key`; report columns without a definition and definitions without values.
-2. Shopify namespaces/keys shorter than 3 characters: propose a rename.
+1. Join definitions and value columns on `namespace.key` (`metafields.py diff`); report columns without a definition and definitions without values.
+2. Shopify namespaces/keys shorter than 3 characters: propose a rename (the decision is keyed by the Flowkiwi `namespace.key`, with `"source": "<shopify namespace.key>"`).
 3. Skip `shopify.*` standard metafields unless the developer wants them (they are often category metafields better handled by the taxonomy module).
-4. Value formats: Shopify CSV list values look like `["a","b"]` or `a; b`; normalize to the Flowkiwi expected format (check with one `create_metafield` on the pilot).
+4. Value formats: Shopify CSV list values look like `["a","b"]` or `a; b`; pick the `transform` that gives the Flowkiwi expected format (check with one `create_metafield` on the pilot).
 5. **Validate every type explicitly**: show a table with one row per kept definition (`namespace.key`, name, Shopify type or `inferred`, proposed Flowkiwi type, value count) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values (`references/undo.md`, scope `shared:<key>`), then recreating them. Show the table again in the dry-run summary.
-6. Record with `state.py decide <dir> --key metafields --value-json '<json>'`: kept definitions with their Flowkiwi type and any value transform.
+6. Record the kept definitions with `state.py decide <dir> --key metafields --value-file metafields.json`, in this format (read by `payload.py` and `plan_shared.py`):
+   `{"definitions": {"custom.ingredients": {"type": "multi_line_text_field", "name": "Ingredients", "transform": null}}}`.
+   `type` is the Flowkiwi type, `name` defaults to the CSV column label, optional `source` is the Shopify `namespace.key` when renamed. `transform`: `null` (value as is), `list_json` (`["a","b"]` or `a; b` -> a JSON array string), `list` (same, as a JSON array), `number`, `json` (parsed), `strip_html` (HTML to plain text lines). Pick the list format with one `create_metafield` on the pilot.
 
 ## Shared elements
 
-For each kept definition: look up with `call_operation list_metafield_definitions`; else `create_metafield_definition` `{"body": {"namespace": "custom", "key": "material", "name": "Material", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/single_line_text_field"}}`. Record `metafield_definition:<namespace>.<key>` with module `metafields`. Never touch the `shopify.handle` marker definition here.
+From `python3 $SKILL/scripts/plan_shared.py <dir>`, for each kept definition: look up with `call_operation list_metafield_definitions`; else `create_metafield_definition` `{"body": {"namespace": "custom", "key": "material", "name": "Material", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/single_line_text_field"}}`. Record `metafield_definition:<namespace>.<key>` with module `metafields`. Never touch the `shopify.handle` marker definition here.
 
 ## Per product
 
-For each kept `namespace.key` with a non-empty value:
+For each entry of the payload `metafields` (`payload.py` keeps the decided definitions with a value, applies the transform and resolves the definition IRI):
 1. `call_operation list_metafields` on `products/<id>`: a metafield with this definition exists -> record `reused`, skip.
-2. Else `call_write_operation create_metafield` `{"path": {"ownerResource": "products", "ownerId": <id>}, "body": {"definition": <iri>, "value": "<value>"}}`.
-3. Record a `metafield` item with module `metafields` and `"shared": "metafield_definition:<namespace>.<key>"` (so `undo` scope `shared:<key>` can remove the values of one definition).
+2. Else `call_write_operation create_metafield` `{"path": {"ownerResource": "products", "ownerId": <id>}, "body": <entry body>}`, copied verbatim.
+3. Record a `metafield` item with module `metafields` and `"shared"` = the entry `shared` (`metafield_definition:<namespace>.<key>`) (so `undo` scope `shared:<key>` can remove the values of one definition).
 
 ## Verify
 

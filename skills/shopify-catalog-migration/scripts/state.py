@@ -4,7 +4,8 @@ Usage:
   python3 state.py init <dir> --client <slug> --mcp-url <url>
   python3 state.py sync <dir>
   python3 state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module>
-  python3 state.py decide <dir> --key <name> --value-json '<json>'
+  python3 state.py shared <dir> --file <shared.json>   # [{"key", "iri", "status", "module"}, ...]
+  python3 state.py decide <dir> --key <name> --value-json '<json>' | --value-file <file.json>
   python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--handles a,b] [--retry-failed] [--module <name>]
   python3 state.py result <results/worker-N.jsonl> --json '<line>' | --json - | --json-file <file>
   python3 state.py merge <dir>
@@ -67,6 +68,20 @@ def sync_products(state, products):
 
 def record_shared(state, key, iri, status, module):
     state["shared"][key] = {"iri": iri, "status": status, "module": module}
+    return state
+
+
+def record_shared_entries(state, entries):
+    """Record many shared elements at once; every entry is checked before any is recorded."""
+    if not isinstance(entries, list):
+        raise ValueError("The shared file must hold a JSON array")
+    for entry in entries:
+        if not isinstance(entry, dict) or not {"key", "iri", "status", "module"} <= set(entry):
+            raise ValueError(f"Each shared entry needs key, iri, status and module: {entry!r}")
+        if entry["status"] not in ITEM_STATUSES or ":" not in str(entry["key"]) or not entry["iri"]:
+            raise ValueError(f"Invalid shared entry {entry!r}: status created|reused, key <kind>:<name>, iri")
+    for entry in entries:
+        record_shared(state, entry["key"], entry["iri"], entry["status"], entry["module"])
     return state
 
 
@@ -454,15 +469,18 @@ def main(argv):
 
     p = sub.add_parser("shared")
     p.add_argument("dir")
-    p.add_argument("--key", required=True)
-    p.add_argument("--iri", required=True)
-    p.add_argument("--status", required=True, choices=["created", "reused"])
-    p.add_argument("--module", required=True)
+    p.add_argument("--file")
+    p.add_argument("--key")
+    p.add_argument("--iri")
+    p.add_argument("--status", choices=["created", "reused"])
+    p.add_argument("--module")
 
     p = sub.add_parser("decide")
     p.add_argument("dir")
     p.add_argument("--key", required=True)
-    p.add_argument("--value-json", required=True)
+    value = p.add_mutually_exclusive_group(required=True)
+    value.add_argument("--value-json")
+    value.add_argument("--value-file")
 
     p = sub.add_parser("worklists")
     p.add_argument("dir")
@@ -525,9 +543,25 @@ def main(argv):
         sync_products(state, _read_json(os.path.join(args.dir, "products.json")))
         print(f"{len(state['products']) - before} new products added")
     elif args.command == "shared":
-        record_shared(state, args.key, args.iri, args.status, args.module)
+        single = [args.key, args.iri, args.status, args.module]
+        try:
+            if args.file:
+                if any(single):
+                    raise ValueError("use either --file or --key/--iri/--status/--module")
+                record_shared_entries(state, _read_json(args.file))
+            elif all(single):
+                record_shared(state, *single)
+            else:
+                raise ValueError("--key, --iri, --status and --module are required without --file")
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
     elif args.command == "decide":
-        decide(state, args.key, json.loads(args.value_json))
+        try:
+            decide(state, args.key, _read_json(args.value_file) if args.value_file else json.loads(args.value_json))
+        except (OSError, ValueError) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
     elif args.command == "worklists":
         merged = _merge_results(args.dir, state)
         _write_json(state_path, state)

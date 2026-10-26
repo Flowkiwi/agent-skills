@@ -1,23 +1,33 @@
 """Print the exact MCP call bodies of one product, from products.json and state.json.
 
 Usage:
-  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|all] [--dry-run]
+  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|all] [--dry-run]
 
 Workers copy every value verbatim from this output. Invisible or special whitespace characters
 (no-break spaces, zero-width characters, soft hyphens, control characters...) are printed as
 \\uXXXX escapes: keep them as is in the JSON arguments of the MCP calls.
 --dry-run prints `<key IRI>` placeholders for shared elements not recorded yet instead of failing.
+
+Module fields come from machine-readable decisions: `taxonomy` as written by taxonomy.py build
+(category and attributes, IRIs from shared `category:<path>`, `attribute_definition:<code>`,
+`attribute_option:<code>:<value>`), and `metafields` as
+{"definitions": {"<namespace.key>": {"type": "<flowkiwi type>", "name": "...", "transform": null,
+"source": "<shopify namespace.key, when renamed>"}}}
+with transform null (value as is), list_json, list, number, json or strip_html.
 """
 
 import argparse
+import html
 import json
 import os
+import re
 import sys
 import unicodedata
 
 STATUSES = {"active": "ACTIVE", "draft": "DRAFT", "archived": "ARCHIVED"}
 MARKER_KEY = "metafield_definition:shopify.handle"
-STEPS = ("product", "options", "variants", "metafields", "all")
+STEPS = ("product", "options", "variants", "metafields", "taxonomy", "all")
+TRANSFORMS = (None, "list_json", "list", "number", "json", "strip_html")
 ESCAPED_CATEGORIES = {"Cc", "Cf", "Zs", "Zl", "Zp"}
 
 
@@ -63,13 +73,53 @@ def status_iri(product, decisions):
     return code if code.startswith("/api/statuses/") else f"/api/statuses/{code.upper()}"
 
 
-def product_body(product, state):
+def _module_decision(decisions, module, required_key):
+    """The decision of a module handled by payload.py, or None when the module is not used."""
+    value = decisions.get(module)
+    if value is None:
+        if module in decisions.get("modules", []):
+            raise PayloadError(f"decision '{module}' is missing")
+        return None
+    if not isinstance(value, dict) or required_key not in value:
+        raise PayloadError(f"decision '{module}' has no '{required_key}': record it in the format of references")
+    return value
+
+
+def taxonomy_fields(product, state, placeholders=False):
+    taxonomy = _module_decision(state.get("decisions", {}), "taxonomy", "products")
+    if taxonomy is None:
+        return {}
+    handle = product["handle"]
+    fields = {}
+    path = taxonomy["products"].get(handle)
+    if path:
+        fields["category"] = shared_iri(state, f"category:{path}", placeholders)
+    attributes = []
+    for definition in taxonomy.get("attributes", []):
+        values = definition.get("values", {}).get(handle) or []
+        if not values:
+            continue
+        code = definition["code"]
+        definition_iri = shared_iri(state, f"attribute_definition:{code}", placeholders)
+        for value in values:
+            if definition.get("type", "list") == "list":
+                option = shared_iri(state, f"attribute_option:{code}:{value}", placeholders)
+                attributes.append({"definition": definition_iri, "option": option})
+            else:
+                attributes.append({"definition": definition_iri, "value": value})
+    if attributes:
+        fields["attributes"] = attributes
+    return fields
+
+
+def product_body(product, state, placeholders=False):
     body = {"title": product["title"]}
     if product.get("description_html"):
         body["description"] = product["description_html"]
     if product.get("tags"):
         body["tags"] = ",".join(product["tags"])
     body["status"] = status_iri(product, state.get("decisions", {}))
+    body.update(taxonomy_fields(product, state, placeholders))
     return body
 
 
@@ -88,15 +138,56 @@ def variants(product):
     ]
 
 
+def _list_values(value):
+    parsed = None
+    try:
+        parsed = json.loads(value)
+    except ValueError:
+        pass
+    if isinstance(parsed, list):
+        return [str(v) for v in parsed]
+    return [v.strip() for v in re.split(r"[;\n]", value) if v.strip()]
+
+
+def transform_value(value, transform):
+    if transform not in TRANSFORMS:
+        raise PayloadError(f"unknown metafield transform '{transform}', use one of {TRANSFORMS}")
+    if transform == "list_json":
+        return json.dumps(_list_values(value), ensure_ascii=False)
+    if transform == "list":
+        return _list_values(value)
+    if transform == "number":
+        number = value.strip().replace(",", ".")
+        try:
+            return int(number) if re.match(r"^-?\d+$", number) else float(number)
+        except ValueError:
+            raise PayloadError(f"value {value!r} is not a number")
+    if transform == "json":
+        try:
+            return json.loads(value)
+        except ValueError:
+            raise PayloadError(f"value {value!r} is not valid JSON")
+    if transform == "strip_html":
+        text = re.sub(r"(?i)<br\s*/?>|</p>|</li>|</h[1-6]>", "\n", value)
+        text = html.unescape(re.sub(r"<[^>]+>", "", text))
+        return "\n".join(line.strip() for line in text.split("\n") if line.strip())
+    return value
+
+
 def metafields(product, state, placeholders=False):
+    decision = _module_decision(state.get("decisions", {}), "metafields", "definitions")
+    if decision is None:
+        return []
     result = []
-    for key, value in sorted(product.get("metafields", {}).items()):
-        shared_key = f"metafield_definition:{key}"
-        entry = state.get("shared", {}).get(shared_key)
-        if key == "shopify.handle" or value in (None, "") or not entry or entry.get("status") == "deleted":
+    for key, definition in sorted(decision["definitions"].items()):
+        definition = definition or {}
+        value = product.get("metafields", {}).get(definition.get("source") or key)
+        if key == "shopify.handle" or value in (None, ""):
             continue
-        result.append({"key": key, "shared": shared_key,
-                       "body": {"definition": shared_iri(state, shared_key, placeholders), "value": value}})
+        shared_key = f"metafield_definition:{key}"
+        body = {"definition": shared_iri(state, shared_key, placeholders),
+                "value": transform_value(value, definition.get("transform"))}
+        result.append({"key": key, "shared": shared_key, "body": body})
     return result
 
 
@@ -106,7 +197,7 @@ def build(products, state, handle, step="all", placeholders=False):
         raise PayloadError(f"handle '{handle}' is not in products.json")
     payload = {"handle": handle}
     if step in ("product", "all"):
-        payload["product"] = {"body": product_body(product, state)}
+        payload["product"] = {"body": product_body(product, state, placeholders)}
         payload["marker"] = {"shared": MARKER_KEY,
                              "body": {"definition": shared_iri(state, MARKER_KEY, placeholders), "value": handle}}
     if step in ("options", "all"):
@@ -115,6 +206,8 @@ def build(products, state, handle, step="all", placeholders=False):
         payload["variants"] = variants(product)
     if step in ("metafields", "all"):
         payload["metafields"] = metafields(product, state, placeholders)
+    if step == "taxonomy":
+        payload["taxonomy"] = taxonomy_fields(product, state, placeholders)
     return payload
 
 
