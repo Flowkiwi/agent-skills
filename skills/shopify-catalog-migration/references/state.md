@@ -75,7 +75,7 @@ Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names
 - Shared keys are `<kind>:<name>`, e.g. `category:T-shirts`, `supplier:Acme`, `metafield_definition:shopify.handle`.
 - Item kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `channel`, `country`.
 - Optional item key `shared`: the shared key the item depends on (`metafield_definition:custom.material` for a metafield). Used by the undo scope `shared:<key>`.
-- `*_link` items (`channel_link`, `collection_link`, `taxonomy_link`) record a relation set on the product, not a resource. Their IRI is `<product iri>#<relation>`. Undo removes the relation with `update_product`, or skips it when the product itself is deleted.
+- `*_link` items (`channel_link`, `collection_link`, `taxonomy_link`, `translation_link`) record a relation set on the product, not a resource. Their IRI is `<product iri>#<relation>`. Undo removes the relation with `update_product`, or skips it when the product itself is deleted.
 
 ## Worker result line
 

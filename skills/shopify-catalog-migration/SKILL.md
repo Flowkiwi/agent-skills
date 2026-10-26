@@ -16,7 +16,7 @@ Guide a Flowkiwi developer from Shopify backoffice exports to a catalog created 
 
 - An agent with shell access and an MCP client. Subagents are optional (see "Running workers").
 - `python3` 3.8+ (scripts use the standard library only). Check once with `python3 --version`; if the command does not exist (often on Windows), use `python` or `py -3` instead everywhere this skill says `python3`, including in worker prompts.
-- The Flowkiwi MCP server connected to the target tenant (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, OAuth). If its tools are missing or ask for authentication, stop and give the developer the setup for their agent from `references/setup.md`.
+- The Flowkiwi MCP server connected to the target tenant (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, OAuth). If its tools are still missing after one retry (see "Start or resume") or ask for authentication, stop and give the developer the setup for their agent from `references/setup.md`.
 
 ## Hard rules
 
@@ -30,7 +30,7 @@ Guide a Flowkiwi developer from Shopify backoffice exports to a catalog created 
 
 ## Start or resume
 
-1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the MCP is not connected, stop and say so.
+1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the Flowkiwi tools are missing at first, the MCP may still be connecting: wait a few seconds (`sleep 5`) and search the tools again once before concluding. Still missing or not connected: stop and say so.
 2. Ask the client slug. Workspace: `migrations/<client-slug>/` (layout in `references/state.md`).
 3. If `migrations/<client-slug>/state.json` exists: run `state.py merge` then `state.py summary`, show it, and offer: **continue**, **add a module**, **retry failed**, **undo** (`references/undo.md`). Otherwise start Phase 1.
 
