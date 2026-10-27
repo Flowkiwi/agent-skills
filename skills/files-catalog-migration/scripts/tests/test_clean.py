@@ -34,6 +34,17 @@ class CleanTextTest(unittest.TestCase):
         self.check("  a \n b  ", "a\nb", {"trim": 2})
         self.check("crème", "crème", {"nfc": 1})
 
+    def test_tabs_at_line_and_value_edges(self):
+        self.check("\ta", "a", {"trim": 1})
+        self.check("a\t", "a", {"trim": 1})
+        self.check("\t", "", {"trim": 1})
+        self.check("a\n\tb", "a\nb", {"trim": 1})
+        self.check("a \t\nb", "a\nb", {"trim": 1})
+        self.check("<ul>\n\t<li>x</li>\n</ul>", "<ul>\n<li>x</li>\n</ul>", {"trim": 1})
+        for raw in ("\ta", "a \t\nb", "<ul>\n\t<li>x</li>\n</ul>"):
+            once = clean.clean_text(raw)
+            self.assertEqual(clean.clean_text(once), once)
+
     def test_kept_characters_and_html(self):
         self.check("Inox® 18/10™ ©2024 90°C éàç", "Inox® 18/10™ ©2024 90°C éàç", {})
         self.check("<p>Prix&nbsp;:  5</p>", "<p>Prix&nbsp;: 5</p>", {"spaces": 1})

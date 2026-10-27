@@ -24,7 +24,7 @@ RULES = [
     ("nbsp", "no-break, thin and other unicode spaces", "space"),
     ("invisible", "zero-width, soft hyphen, BOM, control characters", "(removed)"),
     ("spaces", "inner tab or run of 2+ spaces", "one space"),
-    ("trim", "leading and trailing spaces of each line and of the value", "(removed)"),
+    ("trim", "leading and trailing spaces and tabs of each line and of the value", "(removed)"),
 ]
 RULE_IDS = [rule[0] for rule in RULES]
 VALID_IDS = RULE_IDS + [CUSTOM]
@@ -77,7 +77,7 @@ def _trim(text: str) -> Tuple[str, int]:
     count = 0
     lines = text.split("\n")
     for i, line in enumerate(lines):
-        stripped = line.strip(" ")
+        stripped = line.strip(" \t")
         if stripped != line:
             count += 1
             lines[i] = stripped
