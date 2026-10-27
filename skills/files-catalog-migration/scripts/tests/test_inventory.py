@@ -149,6 +149,22 @@ class HelpersTest(unittest.TestCase):
         self.assertEqual(cols[0]["flags"], [{"flag": "empty"}])
         self.assertEqual(cols[1]["flags"], [])
 
+    def test_mostly_yes_no_column_flags_boolean_variants(self):
+        table = make_table([["Accessoires"], ["OUI"], ["non"], ["NON"], ["Pince à toasts"], ["pince à toasts"],
+                            ["OUI"]])
+        column = inventory.sheet_inventory(table, header_rows=1)["columns"][0]
+        flags = {f["flag"]: f for f in column["flags"]}
+        self.assertEqual(column["kind"], "text")
+        self.assertEqual(flags["boolean_variants"]["values"], ["NON", "OUI", "non"])
+        self.assertEqual(flags["value_variants"]["groups"], [["Pince à toasts", "pince à toasts"]])
+
+    def test_text_column_with_few_yes_no_values_has_no_boolean_variants(self):
+        table = make_table([["Matière"], ["Inox"], ["inox"], ["non"], ["NON"], ["Plastique"]])
+        column = inventory.sheet_inventory(table, header_rows=1)["columns"][0]
+        flags = {f["flag"]: f for f in column["flags"]}
+        self.assertNotIn("boolean_variants", flags)
+        self.assertEqual(flags["value_variants"]["groups"], [["Inox", "inox"], ["NON", "non"]])
+
     def test_similar_label_conflicts_compare_numbers(self):
         table = make_table([["Poids (kg)", "Poids"], ["1,50", "1.5"], ["Bleu", "bleu"], ["2", "3"]])
         cols = inventory.sheet_inventory(table, header_rows=1)["columns"]

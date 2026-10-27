@@ -36,7 +36,7 @@ Flags:
 | `similar_label`    | same label words as the column `with` (brackets, accents, stopwords ignored); `conflicts` = rows filled in both that differ          |
 | `label_mismatch`   | the label names a link (`pdf`, `url`, `lien`, `link`, `visuel`, `image`, `photo`) but under half of the values are URLs (`matching`) |
 | `suspect_scale`    | numbers above 100 times the median of the column, likely another unit or a typing error                                              |
-| `boolean_variants` | a yes/no column spelling one answer several ways (`OUI`, `oui`, `Oui`)                                                               |
+| `boolean_variants` | a column of yes/no answers (at least half of its values) spelling one answer several ways (`OUI`, `oui`, `Oui`)                      |
 | `value_variants`   | distinct values equal once case and accents are ignored (`Inox`, `inox`)                                                             |
 
 After the run, summarize to the developer, sheet by sheet: the empty columns, the duplicates (`same_values`, `similar_label` with their conflict counts), the columns whose content does not match the label, the suspect scales and the spelling variants.

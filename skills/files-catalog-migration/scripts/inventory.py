@@ -191,12 +191,13 @@ def column_flags(index: int, columns: List[dict], values: List[List[Optional[str
         suspects = suspect_scale(filled)
         if suspects:
             flags.append({"flag": "suspect_scale", "values": suspects})
-    if kind == "boolean":
-        spellings = boolean_variants(filled)
-        if spellings:
-            flags.append({"flag": "boolean_variants", "values": spellings})
-    elif filled:
-        groups = value_variants(filled)
+    # a yes/no column may also hold a few free texts ("NON", "non", "<accessory name>")
+    answers = [v for v in filled if v.casefold() in BOOLEAN]
+    spellings = boolean_variants(answers) if answers and len(answers) * 2 >= len(filled) else []
+    if spellings:
+        flags.append({"flag": "boolean_variants", "values": spellings})
+    if kind != "boolean" and filled:
+        groups = value_variants([v for v in filled if not spellings or v.casefold() not in BOOLEAN])
         if groups:
             flags.append({"flag": "value_variants", "groups": groups})
     return flags
