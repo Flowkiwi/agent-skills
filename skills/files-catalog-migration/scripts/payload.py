@@ -3,7 +3,7 @@
 The import.key marker (shared `metafield_definition:import.key`) carries the product handle as its value.
 
 Usage:
-  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|all] [--dry-run]
+  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|all] [--dry-run]
 
 Workers copy every value verbatim from this output. Invisible or special whitespace characters
 (no-break spaces, zero-width characters, soft hyphens, control characters...) are printed as
@@ -12,7 +12,9 @@ Workers copy every value verbatim from this output. Invisible or special whitesp
 
 Module fields come from machine-readable decisions: `taxonomy` as written by taxonomy.py build
 (category and attributes, IRIs from shared `category:<path>`, `attribute_definition:<code>`,
-`attribute_option:<code>:<value>`), and `metafields` as
+`attribute_option:<code>:<value>`), `collections` as written by collections_concept.py build
+(membership, IRIs from shared `collection:<path>`; --step collections prints the IRIs of the product's
+collections, to send with its existing ones), and `metafields` as
 {"definitions": {"<namespace.key>": {"type": "<flowkiwi type>", "name": "...", "transform": null,
 "source": "<products.json metafield key, when renamed>"}}}
 with transform null (value as is), list_json, list, number, json or strip_html.
@@ -28,7 +30,7 @@ import unicodedata
 
 STATUSES = {"active": "ACTIVE", "draft": "DRAFT", "archived": "ARCHIVED"}
 MARKER_KEY = "metafield_definition:import.key"
-STEPS = ("product", "options", "variants", "metafields", "taxonomy", "all")
+STEPS = ("product", "options", "variants", "metafields", "taxonomy", "collections", "all")
 TRANSFORMS = (None, "list_json", "list", "number", "json", "strip_html")
 ESCAPED_CATEGORIES = {"Cc", "Cf", "Zs", "Zl", "Zp"}
 
@@ -119,6 +121,14 @@ def taxonomy_fields(product, state, placeholders=False):
     return fields
 
 
+def collection_iris(product, state, placeholders=False):
+    collections = _module_decision(state.get("decisions", {}), "collections", "membership")
+    if collections is None:
+        return []
+    paths = collections["membership"].get(product["handle"]) or []
+    return [shared_iri(state, f"collection:{path}", placeholders) for path in paths]
+
+
 def product_body(product, state, placeholders=False):
     body = {"title": product["title"]}
     if product.get("description_html"):
@@ -127,6 +137,9 @@ def product_body(product, state, placeholders=False):
         body["tags"] = ",".join(product["tags"])
     body["status"] = status_iri(product, state.get("decisions", {}))
     body.update(taxonomy_fields(product, state, placeholders))
+    iris = collection_iris(product, state, placeholders)
+    if iris:
+        body["collections"] = iris
     return body
 
 
@@ -222,6 +235,8 @@ def build(products, state, handle, step="all", placeholders=False):
         payload["metafields"] = metafields(product, state, placeholders)
     if step == "taxonomy":
         payload["taxonomy"] = taxonomy_fields(product, state, placeholders)
+    if step == "collections":
+        payload["collections"] = collection_iris(product, state, placeholders)
     return payload
 
 

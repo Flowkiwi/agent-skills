@@ -4,11 +4,11 @@ Usage:
   python3 plan_shared.py <dir> [--ready]
 
 Covers the core import.key marker definition, then (when decided) categories parents first, attribute definitions,
-attribute options, metafield definitions. Keys already recorded `created` or `reused` in state.json are
-skipped. Every entry carries a `spec` (what was asked), recorded with the IRI to detect later drift.
+attribute options, collections parents first, metafield definitions. Keys already recorded `created` or `reused`
+in state.json are skipped. Every entry carries a `spec` (what was asked), recorded with the IRI to detect later drift.
 A body referencing a shared element not recorded yet holds a `<key IRI>` placeholder and lists it
 in `depends_on`; --ready prints only the entries whose dependencies are all recorded. Other modules'
-shared elements (countries, taxes, suppliers, channels, collections) follow their references.
+shared elements (countries, taxes, suppliers, channels) follow their references.
 """
 
 import argparse
@@ -103,6 +103,17 @@ def plan(state, metafield_columns=None):
                     f"list_attribute_options of the definition: value '{option['value']}'",
                     {"value": option["value"], "position": position}, {"value": option["value"]}, depends_on,
                     {"definitionId": definition_iri})
+
+    collections = decisions.get("collections")
+    if isinstance(collections, dict) and "collections" in collections:
+        status = collections.get("status", "/api/statuses/ACTIVE")
+        for collection in collections["collections"]:
+            depends_on = []
+            parent = _iri(state, f"collection:{collection['parent']}", depends_on) if collection.get("parent") else None
+            add(f"collection:{collection['path']}", "collections", "create_collection",
+                f"list_collections: name '{collection['name']}' with the same parent",
+                {"name": collection["name"], "parent": parent, "status": status},
+                {"name": collection["name"], "parent": collection.get("parent")}, depends_on)
 
     metafields = decisions.get("metafields")
     if isinstance(metafields, dict) and "definitions" in metafields:
