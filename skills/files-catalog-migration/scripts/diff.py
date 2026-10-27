@@ -250,7 +250,8 @@ def diff(state_data, products):
     entries = state_data.get("products", {})
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
-              "blocked_rekeys": {}, "moved": [], "blocked_moves": [], "deleted_present": [], "no_written": [], "errors": {}, "conflicts": {},
+              "blocked_rekeys": {}, "moved": [], "blocked_moves": [], "deleted_present": [], "no_written": [],
+              "errors": {}, "conflicts": {},
               "missing_snapshots": [], "snapshots": {}, "conflicts_checked": False,
               "source": source_fingerprint(state_data, products)}
 

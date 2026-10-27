@@ -743,7 +743,8 @@ def merge(state, lines, products=None):
     it adds items and records a per-module error, without touching the product status.
     An item tied to a recorded shared element takes that element's module (a reference metafield: metaobjects).
     `updated` keeps the product created (updated_phase), `archived` archives it, a failed line on a product
-    already created or archived (an update run) only records the error and its phase (error_phase). `deleted` IRIs mark those items deleted.
+    already created or archived (an update run) only records the error and its phase (error_phase). `deleted` IRIs
+    mark those items deleted.
     With `products` (products.json), every non-failed line records the `written` snapshot of the product."""
     for line in lines:
         for item in line["items"]:
