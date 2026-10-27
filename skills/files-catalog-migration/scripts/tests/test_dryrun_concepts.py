@@ -48,6 +48,16 @@ class DryRunConceptsTest(unittest.TestCase):
         self.assertIn("  metaobjects: 1 definitions, 3 entries, 6 products referenced", text)
         self.assertRegex(text, r"custom\.poids_net \| Poids net \(kg\) \| proposed number_decimal \| chosen number_decimal \| 5 values")
 
+    def test_proposed_names_are_listed(self):
+        text, _ = dryrun.report(self.dir)
+        concepts = text[text.index("Concepts:"):text.index("Blocking:")].splitlines()
+        for line in ("    category paths:", "      Petit électroménager > Grille-pain", "    attributes:",
+                     "      matiere 'Matière' (list): Acier inoxydable, Plastique", "    definitions:",
+                     "      marque 'Marque': fields nom 'Nom' (single_line_text_field); reference custom.marque 'Marque'",
+                     "    entries:", "      marque brioche-co 'Brioche & Co'", "    taxes:",
+                     "      FR: TVA 20 FR 20% (to create)"):
+            self.assertIn(line, concepts)
+
     def test_stale_decision_blocks(self):
         self.edit_mapping("taxonomy", lambda m: m["categories"].update(drop_levels=2))
         run("extract.py", self.dir, "taxonomy")
@@ -178,6 +188,17 @@ class ConceptLinesTest(unittest.TestCase):
         data = {"countries": [{"code": "FR"}], "offers": {"a": {"A-1": {"FR": {}}}, "b": {"B-1": {"FR": {}}}}}
         lines = dryrun.concept_lines("prices", data, [{"variants": [{"sku": "A-1"}]}])
         self.assertEqual(lines, ["  prices: 2 offers, 0 variant-country pairs without price, countries FR"])
+
+    def test_names_are_capped(self):
+        data = {"collections": [{"path": "Collection %02d" % i} for i in range(25)], "membership": {}}
+        lines = dryrun.name_lines("collections", data)
+        self.assertEqual(lines[0], "    collection paths:")
+        self.assertEqual(lines[1:3], ["      Collection 00", "      Collection 01"])
+        self.assertEqual(lines[-1], "      ... and 5 more")
+        self.assertEqual(len(lines), 22)
+        options = [{"value": "V%d" % i} for i in range(22)]
+        taxonomy = {"categories": [], "attributes": [{"code": "c", "name": "C", "type": "list", "options": options}]}
+        self.assertTrue(dryrun.name_lines("taxonomy", taxonomy)[1].endswith(", V19, ... and 2 more"))
 
     def test_missing_sku_and_too_long_in_a_concept_file_block(self):
         warnings = [{"row": 3, "handle": "a", "code": code, "field": "f", "message": "m", "stage": "extract"}

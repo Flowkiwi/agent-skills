@@ -27,6 +27,7 @@ REQUIRED_DECISIONS = ("status_mode", "data_language")
 STATUS_MODES = ("draft", "active", "source")
 MAX_CANDIDATES = 3
 MAX_PAYLOAD_ERRORS = 10
+MAX_NAMES = 20
 SPEC_RESERVED = ("origin", "reason", "question")
 CONCEPTS = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
 CONCEPT_BLOCKING = ("list_in_single_field", "missing_sku", "too_long")
@@ -218,6 +219,45 @@ def metafield_rows(data) -> List[str]:
     return ["    " + " | ".join([cell.ljust(width) for cell, width in zip(row, widths)] + row[-1:]) for row in rows]
 
 
+def capped(items: List[str]) -> List[str]:
+    more = len(items) - MAX_NAMES
+    return items[:MAX_NAMES] + (["... and %d more" % more] if more > 0 else [])
+
+
+def named(title: str, items: List[str]) -> List[str]:
+    return ["    %s:" % title] + ["      " + item for item in capped(items)] if items else []
+
+
+def name_lines(concept: str, data: dict) -> List[str]:
+    """The names the migration will write, in the data language, for the developer to review."""
+    if concept == "taxonomy":
+        attributes = []
+        for a in data.get("attributes") or []:
+            options = capped([o["value"] for o in a.get("options") or []])
+            attributes.append("%s '%s' (%s)%s" % (a["code"], a["name"], a.get("type", "list"),
+                                                  ": " + ", ".join(options) if options else ""))
+        return (named("category paths", [c["path"] for c in data.get("categories") or []])
+                + named("attributes", attributes))
+    if concept == "collections":
+        return named("collection paths", [c["path"] for c in data.get("collections") or []])
+    if concept == "metaobjects":
+        definitions, display = [], {}
+        for d in data.get("definitions") or []:
+            display[d["type"]] = d.get("displayNameField")
+            fields = ", ".join("%s '%s' (%s)" % (f["key"], f["name"], f["type"]) for f in d.get("fields") or [])
+            reference = d.get("reference")
+            definitions.append("%s '%s': fields %s%s" % (d["type"], d["name"], fields, "; reference %s '%s'" % (
+                reference["metafield"], reference["name"]) if reference else ""))
+        entries = ["%s %s '%s'" % (e["definition"], e["handle"], e["fields"].get(display.get(e["definition"]), ""))
+                   for e in data.get("entries") or []]
+        return named("definitions", definitions) + named("entries", entries)
+    if concept == "prices":
+        return named("taxes", ["%s: %s %s%% (%s)" % (c.get("code"), c.get("tax_name") or c.get("tax"), c.get("rate"),
+                                                    "to create" if c.get("tax") is None else "existing")
+                               for c in data.get("countries") or []])
+    return []
+
+
 def concept_lines(concept: str, data: dict, products: List[dict]) -> List[str]:
     if concept == "taxonomy":
         attributes = data.get("attributes") or []
@@ -244,7 +284,7 @@ def concepts_section(files, products) -> List[str]:
         return ["Concepts: none"]
     lines = ["Concepts:"]
     for concept, data in files:
-        lines += concept_lines(concept, data, products)
+        lines += concept_lines(concept, data, products) + name_lines(concept, data)
         if data.get("warnings"):
             lines += indented(catalog.format_warnings(data["warnings"]), "    ")
     return lines
