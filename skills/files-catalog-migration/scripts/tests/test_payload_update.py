@@ -229,18 +229,93 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         self.assertEqual(plan["product"]["body"], {"title": "Duo"})
         self.assertNotIn("variants", plan)
 
-    def test_moved_sku_waits_for_its_deletion(self):
+    def test_moved_sku_is_deferred_until_its_deletion(self):
         self.create("2226")
         self.create("2230")
         state.start_phase(self.st)
         duo = product(self.products, "2230")
         moved = duo["variants"].pop()
+        product(self.products, "2226")["title"] = "Grille-pain Toastine"
         product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))
-        with self.assertRaisesRegex(payload.PayloadError, "SKU 1006 of '2226' is still a variant of '2230'"):
-            self.plan("2226")
-        delete = self.plan("2230")["variants"]["delete"]
+        d = diff.diff(self.st, self.products)
+        plan = payload.update_plan(self.products, self.st, d, "2226")
+        self.assertEqual(plan["deferred"], [{"sku": "1006", "held_by": "2230"}])
+        self.assertEqual(plan["product"]["body"], {"title": "Grille-pain Toastine"})
+        self.assertNotIn("variants", plan)
+        delete = payload.update_plan(self.products, self.st, d, "2230")["variants"]["delete"]
         state.mark_deleted(self.st, [v["iri"] for v in delete])
-        self.assertEqual([v["sku"] for v in self.plan("2226")["variants"]["create"]], ["1006"])
+        plan = payload.update_plan(self.products, self.st, d, "2226")
+        self.assertEqual([v["sku"] for v in plan["variants"]["create"]], ["1006"])
+        self.assertNotIn("deferred", plan)
+
+    def test_swapped_skus(self):
+        self.create("2226")
+        self.create("2230")
+        state.start_phase(self.st)
+        toaster, duo = product(self.products, "2226"), product(self.products, "2230")
+        one, six = toaster["variants"][0], duo["variants"][1]
+        toaster["variants"] = [dict(six, option_values=[])]
+        duo["variants"] = [duo["variants"][0], dict(one, option_values=["Rouge"])]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(sorted(m["sku"] for m in d["moved"]), ["1001", "1006"])
+        first = payload.update_plan(self.products, self.st, d, "2226")
+        second = payload.update_plan(self.products, self.st, d, "2230")
+        self.assertEqual((first["deferred"], second["deferred"]),
+                         ([{"sku": "1006", "held_by": "2230"}], [{"sku": "1001", "held_by": "2226"}]))
+        self.assertEqual(first["variants"], {"delete": [{"iri": variant_iri("2226", "1001"), "sku": "1001"}]})
+        self.assertEqual(second["variants"], {"delete": [{"iri": variant_iri("2230", "1006"), "sku": "1006"}]})
+        state.mark_deleted(self.st, [variant_iri("2226", "1001"), variant_iri("2230", "1006")])
+        first = payload.update_plan(self.products, self.st, d, "2226")
+        second = payload.update_plan(self.products, self.st, d, "2230")
+        self.assertEqual((first["variants"].keys(), second["variants"].keys()), ({"create"}, {"create"}))
+        self.assertEqual(([v["sku"] for v in first["variants"]["create"]],
+                          [v["sku"] for v in second["variants"]["create"]]), (["1006"], ["1001"]))
+        self.assertNotIn("deferred", first)
+
+    def test_deferred_sku_keeps_its_prices_for_later(self):
+        countries = [{"code": "FR", "country": "/api/countries/00000000-0000-4000-8000-000000000010",
+                      "tax": "/api/taxes/00000000-0000-4000-8000-000000000011", "currency": "EUR"}]
+        offers = {"2226": {"1001": {"FR": {"taxExcludedPrice": "20.00"}}},
+                  "2230": {"1005": {"FR": {"taxExcludedPrice": "30.00"}},
+                           "1006": {"FR": {"taxExcludedPrice": "31.00"}}}}
+        state.decide(self.st, "prices", {"offers": offers, "countries": countries}, "developer")
+        self.create("2226", item("2226", "sale_offer", "1001:FR", "prices"))
+        self.create("2230", item("2230", "sale_offer", "1005:FR", "prices"),
+                    item("2230", "sale_offer", "1006:FR", "prices"))
+        state.start_phase(self.st)
+        duo = product(self.products, "2230")
+        product(self.products, "2226")["variants"].append(dict(duo["variants"].pop(), option_values=[]))
+        offers = {"2226": {"1001": {"FR": {"taxExcludedPrice": "20.00"}},
+                           "1006": {"FR": {"taxExcludedPrice": "31.00"}}},
+                  "2230": {"1005": {"FR": {"taxExcludedPrice": "30.00"}}}}
+        state.decide(self.st, "prices", {"offers": offers, "countries": countries}, "developer")
+        plan = self.plan("2226")
+        self.assertEqual(plan["deferred"], [{"sku": "1006", "held_by": "2230"}])
+        self.assertNotIn("prices", plan)
+
+    def test_stale_diff_in_the_same_phase(self):
+        self.create("2226")
+        state.start_phase(self.st)
+        toaster = product(self.products, "2226")
+        toaster["variants"].append(dict(toaster["variants"][0], sku="1009", barcode="3601234560098"))
+        d = diff.diff(self.st, self.products)
+        toaster["variants"].pop()
+        with self.assertRaisesRegex(payload.PayloadError, "variant '1009' of '2226' .* run diff.py again"):
+            payload.update_plan(self.products, self.st, d, "2226")
+
+    def test_printed_again_after_a_partial_run(self):
+        self.create("2230", item("2230", "product_option", "Couleur"), item("2230", "option_value", "Couleur:Rouge"))
+        state.start_phase(self.st)
+        duo = product(self.products, "2230")
+        duo["options"] = [{"name": "Couleur", "values": ["Noir", "Bleu"]}]
+        duo["variants"] = [duo["variants"][0], {"sku": "1007", "barcode": "3601234560074", "option_values": ["Bleu"]}]
+        d = diff.diff(self.st, self.products)
+        state.mark_deleted(self.st, [variant_iri("2230", "1006"), child_iri("2230", "option_value", "Couleur:Rouge")])
+        line = {"handle": "2230", "status": "updated", "iri": product_iri("2230"), "error": None,
+                "items": [item("2230", "option_value", "Couleur:Bleu"), item("2230", "variant", "1007")]}
+        state.merge(self.st, [line])
+        self.assertEqual({k: v for k, v in payload.update_plan(self.products, self.st, d, "2230").items()
+                          if k not in ("handle", "action", "iri")}, {"product": None})
 
     def test_rekeyed_removal_needs_confirmed_rekey(self):
         self.create("2226")

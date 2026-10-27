@@ -36,8 +36,11 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
 - removed: {"handle", "action": "archive", "iri", "product": {"body": {"status": ARCHIVED}}} or
   {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
   the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey.
-A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A SKU still held
-by a created variant of another product is refused until that variant is deleted (diff.json moved, rekeyed).
+A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A new variant whose
+SKU is still a created variant of another product (diff.json moved, rekeyed, two products swapping SKUs) is left
+out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
+`held_by` is merged, print the plan again: children already deleted or recorded are left out, so it only holds
+what is still to do (and the field updates, sent again as they are).
 """
 
 import argparse
@@ -322,14 +325,20 @@ ARCHIVED = "/api/statuses/ARCHIVED"
 
 
 class _Children:
-    """The child items of a product in the state, by kind and ref."""
+    """The child items of a product in the state, by kind and ref. A plan can be printed again after a partial
+    run: a child already deleted is not deleted again, a child already recorded is not created again."""
 
     def __init__(self, handle, product):
         self.handle = handle
         self.items = {}
+        self.deleted = set()
         for item in product["items"]:
-            if item.get("ref") and item.get("status") in ("created", "reused"):
+            if not item.get("ref"):
+                continue
+            if item.get("status") in ("created", "reused"):
                 self.items.setdefault((item["kind"], item["ref"]), item)
+            elif item.get("status") == "deleted":
+                self.deleted.add((item["kind"], item["ref"]))
 
     def _item(self, kind, ref):
         item = self.items.get((kind, ref))
@@ -339,7 +348,9 @@ class _Children:
         return item
 
     def target(self, kind, ref):
-        """IRI of a child to update or delete; None when it is reused (never written)."""
+        """IRI of a child to update or delete; None when it is reused (never written) or already deleted."""
+        if (kind, ref) not in self.items and (kind, ref) in self.deleted:
+            return None
         item = self._item(kind, ref)
         return item["iri"] if item["status"] == "created" else None
 
@@ -347,9 +358,20 @@ class _Children:
         """IRI of a child a new child is created under."""
         return self._item(kind, ref)["iri"]
 
+    def exists(self, kind, ref):
+        return (kind, ref) in self.items
+
     def created(self, kind, prefix):
         return [(ref, item["iri"]) for (k, ref), item in self.items.items()
                 if k == kind and ref.startswith(prefix) and item["status"] == "created"]
+
+
+def _now(entries, key, handle, what):
+    """The entry of the payload now that diff.json names; missing when products.json changed since diff.py."""
+    if key not in entries:
+        raise PayloadError(f"{what} '{key}' of '{handle}' in diff.json is not in the payload now: "
+                           "products.json changed since, run diff.py again")
+    return entries[key]
 
 
 def _cleared(name):
@@ -366,20 +388,24 @@ def _product_update(change, now):
 
 def _options_update(change, now, children):
     options = change.get("options", {})
+    handle = children.handle
     current = {o["title"]: o for o in now.get("options") or []}
     used = {}
     for variant in now.get("variants") or []:
         for index, value in enumerate(variant["option_values"]):
             used.setdefault(index, set()).add(value)
-    group = {"create": [current[title] for title in options.get("added", [])], "values_create": [],
-             "values_delete": [], "delete": []}
+    group = {"create": [_now(current, title, handle, "option") for title in options.get("added", [])
+                        if not children.exists("product_option", title)],
+             "values_create": [], "values_delete": [], "delete": []}
     for title, values in options.get("values_added", {}).items():
-        iri = children.parent("product_option", title)
-        positions = {v["value"]: v["position"] for v in current[title]["values"]}
-        group["values_create"] += [{"option": title, "option_iri": iri, "value": value, "position": positions[value]}
-                                   for value in values]
+        positions = {v["value"]: v["position"] for v in _now(current, title, handle, "option")["values"]}
+        todo = [value for value in values if not children.exists("option_value", f"{title}:{value}")]
+        iri = children.parent("product_option", title) if todo else None
+        group["values_create"] += [{"option": title, "option_iri": iri, "value": value,
+                                    "position": _now(positions, value, handle, f"value of {title}")}
+                                   for value in todo]
     for title, values in options.get("values_removed", {}).items():
-        in_use = used.get(current[title]["position"], set())
+        in_use = used.get(_now(current, title, handle, "option")["position"], set())
         for value in values:
             iri = children.target("option_value", f"{title}:{value}") if value not in in_use else None
             if iri:
@@ -396,8 +422,11 @@ def _options_update(change, now, children):
 
 def _variants_update(change, now, children):
     variants = change.get("variants", {})
+    handle = children.handle
     current = {v["sku"]: v for v in now.get("variants") or []}
-    group = {"delete": [], "update": [], "create": [current[sku] for sku in variants.get("added", [])]}
+    group = {"delete": [], "update": [],
+             "create": [_now(current, sku, handle, "variant") for sku in variants.get("added", [])
+                        if not children.exists("variant", sku)]}
     for sku in variants.get("removed", []):
         iri = children.target("variant", sku)
         if iri:
@@ -406,11 +435,12 @@ def _variants_update(change, now, children):
         iri = children.target("variant", sku)
         if iri is None:
             continue
+        variant = _now(current, sku, handle, "variant")
         entry = {"iri": iri, "sku": sku, "body": {}}
         if "barcode" in fields:
-            entry["body"]["barcode"] = current[sku]["barcode"]
+            entry["body"]["barcode"] = variant["barcode"]
         if "option_values" in fields:
-            entry["option_values"] = list(current[sku]["option_values"])
+            entry["option_values"] = list(variant["option_values"])
         group["update"].append(entry)
     return group
 
@@ -418,7 +448,10 @@ def _variants_update(change, now, children):
 def _keyed_update(change, entries, children, kind, key, field):
     """delete / update / create of a keyed group (metafields by namespace.key, prices by <sku>:<country>)."""
     current = {key(e): e for e in entries}
-    group = {"delete": [], "update": [], "create": [current[k] for k in change.get("added", [])]}
+    handle = children.handle
+    group = {"delete": [], "update": [],
+             "create": [_now(current, k, handle, kind) for k in change.get("added", [])
+                        if not children.exists(kind, k)]}
     for ref in change.get("removed", []):
         iri = children.target(kind, ref)
         if iri:
@@ -426,7 +459,8 @@ def _keyed_update(change, entries, children, kind, key, field):
     for ref, (old, _) in change.get("changed", {}).items():
         iri = children.target(kind, ref)
         if iri:
-            group["update"].append({"iri": iri, field: ref, "body": _changed_body(kind, old, current[ref]["body"])})
+            new = _now(current, ref, handle, kind)["body"]
+            group["update"].append({"iri": iri, field: ref, "body": _changed_body(kind, old, new)})
     return group
 
 
@@ -464,15 +498,23 @@ def _changed_plan(products, state, diff_data, handle, entry):
         "prices": _keyed_update(change.get("prices", {}), now.get("prices") or [], children,
                                 "sale_offer", lambda e: f"{e['sku']}:{e['country']}", "ref"),
     }
+    # A SKU still held by another product (moved, swapped, rekeyed into this one) waits for its deletion there;
+    # every other operation, this product's own deletions included, goes on.
+    deferred = []
     for variant in groups["variants"]["create"]:
         other = _held_elsewhere(state, handle, variant["sku"])
         if other:
-            raise PayloadError(f"SKU {variant['sku']} of '{handle}' is still a variant of '{other}': update or "
-                               f"delete '{other}' first (diff.json moved, rekeyed)")
+            deferred.append({"sku": variant["sku"], "held_by": other})
+    if deferred:
+        waiting = {d["sku"] for d in deferred}
+        groups["variants"]["create"] = [v for v in groups["variants"]["create"] if v["sku"] not in waiting]
+        groups["prices"]["create"] = [p for p in groups["prices"]["create"] if p["sku"] not in waiting]
     for name, group in groups.items():
         group = _non_empty(group)
         if group:
             plan[name] = group
+    if deferred:
+        plan["deferred"] = deferred
     return plan
 
 
