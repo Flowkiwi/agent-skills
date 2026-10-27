@@ -10,6 +10,9 @@ migrations/<client-slug>/
 ├── state.json          # decisions, shared elements, per-product progress
 ├── worklists/          # worker-<n>.json: handles assigned to each worker
 ├── results/            # worker-<n>.jsonl: one result line per product, written by workers
+│                       # rejected-<stamp>.jsonl: lines refused by merge, with the reason
+├── verify-sample.json  # handles whose description is checked after creation (verify.py sample)
+├── tmp/                # worker-<n>/: each worker's own temporary files (line.json, readback.txt)
 └── undo/               # deleted-<timestamp>.json: IRIs deleted by an undo run
 ```
 
@@ -17,7 +20,7 @@ All script commands below take the workspace folder as `<dir>`.
 
 ## products.json
 
-`{"products": [...], "warnings": [...]}`. One product entry per Shopify handle (`row` is the first CSV line of the product):
+`{"products": [...], "warnings": [...], "metafield_columns": {"custom.material": "Material"}}` (`metafield_columns`: label of each metafield column of the export, absent from older files). One product entry per Shopify handle (`row` is the first CSV line of the product):
 
 ```json
 {
@@ -33,7 +36,7 @@ All script commands below take the workspace folder as `<dir>`.
 }
 ```
 
-Warning entry: `{"row": 7, "handle": "cap", "code": "duplicate_sku", "message": "SKU 'TS-S' already used by 'tshirt-basic'"}`. Codes: `duplicate_sku`, `missing_sku`, `missing_barcode`, `short_option_name`, `orphan_row` (only at parse time). `shopify_csv.py --validate products.json` recomputes them after fixes.
+Warning entry: `{"row": 7, "handle": "cap", "code": "duplicate_sku", "message": "SKU 'TS-S' already used by 'tshirt-basic'"}`. Codes: `non_sellable` (every variant price 0 or empty, no Shopify SKU, no `type`; printed first), `unknown_status` (not `active`, `draft` or `archived`, e.g. `unlisted`), `option_name_case` (same option name differing only by case across products, one warning per minority form), `duplicate_sku`, `missing_sku`, `missing_barcode`, `short_option_name`, `orphan_row` (only at parse time). `shopify_csv.py --validate products.json` recomputes them after fixes.
 
 Not migrated, but kept: `images` (no media creation through the MCP), `grams` (Flowkiwi variants have no weight field), `published` / `vendor` / `type` unless a module uses them.
 
@@ -42,43 +45,60 @@ Not migrated, but kept: `images` (no media creation through the MCP), `grams` (F
 Every consolidation change, so it can be replayed on a new export:
 
 ```json
-{"skus": {"cap": {"TS-S": "TS-S-2"}}, "option_names": {"poster": {"Sz": "Size"}}, "skip": ["old-product"]}
+{"skus": {"cap": {"TS-S": "TS-S-2"}}, "option_names": {"poster": {"Sz": "Size"}, "*": {"size": "Size"}},
+ "skip": ["old-product"], "skip_rules": [{"non_sellable": true}, {"metafield_prefix": "custom.recipe_"}, {"handle_pattern": "^recipe-"}]}
 ```
 
-Applied with `codes.py fix products.json fixes.json` (idempotent).
+Applied with `codes.py fix products.json fixes.json` (idempotent). `option_names` under `*` apply to every product (a handle entry wins). A product matching any of `skip_rules` is skipped; the conditions inside one rule must all match. `fix` prints how many products each rule skipped.
 
 ## state.json
 
 ```json
 {
   "version": 1, "client": "acme", "mcp_url": "https://...", "started_at": "2026-10-26T10:00:00Z",
-  "decisions": {"modules": ["core", "prices"], "status_mode": "draft", "codes": {"prefix": "2", "next_start": 6, "sku_pattern": "{handle}-{index}"}},
-  "shared": {"category:T-shirts": {"iri": "/api/categories/...", "status": "created", "module": "taxonomy"}},
+  "decisions": {"modules": ["core", "prices"], "data_language": "fr", "status_mode": "draft", "codes": {"prefix": "2", "next_start": 6, "sku_pattern": "{handle}-{index}"}},
+  "shared": {"category:T-shirts": {"iri": "/api/categories/019f84f8-...", "status": "created", "module": "taxonomy"}},
   "products": {"tshirt-basic": {
     "status": "pending", "iri": null, "pilot": false, "error": null,
-    "items": [{"kind": "variant", "iri": "/api/...", "status": "created", "module": "core"}]
+    "items": [{"kind": "variant", "iri": "/api/products/019f.../variants/019f...", "status": "created", "module": "core"}]
   }}
 }
 ```
 
 - Product status: `pending`, `created`, `failed`, `deleted`, `skipped` (handle no longer in `products.json`; back to `pending` if it reappears).
 - `module_errors`: `{"<module>": "<error>"}` from module-only runs; they never change the product status.
+- `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
+- `decisions.taxonomy` and `decisions.metafields`: machine-readable formats in `references/taxonomy.md` and `references/metafields.md`, read by `payload.py` and `plan_shared.py`.
+- `decisions.status_map`: `{"<shopify status>": "<Flowkiwi status code>"}`, e.g. `{"unlisted": "DRAFT"}`, applied before the default mapping when `status_mode` is `shopify`.
+- `decisions.data_language`: language of every name or label generated by the migration (ISO code, e.g. `fr`). `decisions.marker_labels` (`{"name", "description"}`) overrides the marker definition labels for a language `plan_shared.py` does not know.
 - `decisions.adopt`: `{"<handle>": "<tenant product IRI>"}` for Shopify products mapped to an existing tenant product during consolidation.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Shared keys are `<kind>:<name>`, e.g. `category:T-shirts`, `supplier:Acme`, `metafield_definition:shopify.handle`.
 - Item kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `channel`, `country`.
-- `*_link` items (`channel_link`, `collection_link`, `taxonomy_link`) record a relation set on the product, not a resource. Their IRI is `<product iri>#<relation>`. Undo removes the relation with `update_product`, or skips it when the product itself is deleted.
+- Optional item key `shared`: the shared key the item depends on (`metafield_definition:custom.material` for a metafield). Used by the undo scope `shared:<key>`.
+- `*_link` items (`channel_link`, `collection_link`, `taxonomy_link`, `translation_link`) record a relation set on the product, not a resource. Their IRI is `<product iri>#<relation>`. Undo removes the relation with `update_product`, or skips it when the product itself is deleted.
 
 ## Worker result line
 
 ```json
-{"handle": "tshirt-basic", "status": "created", "iri": "/api/products/...", "error": null,
- "items": [{"kind": "product", "iri": "/api/products/...", "status": "created", "module": "core"}]}
+{"handle": "tshirt-basic", "status": "created", "iri": "/api/products/019f84f8-...", "error": null, "verify": "ok",
+ "items": [{"kind": "product", "iri": "/api/products/019f84f8-...", "status": "created", "module": "core"}]}
 ```
 
-`status` is `created` or `failed`. On failure, still list the items created before the failure so they can be reused or undone. Module-only runs add `"module": "<name>"`: the line then only adds items and a per-module error.
+`status` is `created` or `failed`. On failure, still list the items created before the failure so they can be reused or undone. Module-only runs add `"module": "<name>"`: the line then only adds items and a per-module error. Optional `verify`: `ok`, `fixed` or `mismatch`.
 
-`merge` moves merged files to `results/merged/`, so a result line is never applied twice (e.g. after an undo).
+`state.py result` rejects a line that does not follow these rules:
+- every IRI is `/api/<resource>/<uuid>` (nested: `/api/<resource>/<uuid>/<sub>/<uuid>`), exactly as returned by the API;
+- `iri` is required when `status` is `created`;
+- only `*_link` items carry a `#<relation>` suffix (`#translations-<locale>` for translations), and they must;
+- item `status` is `created` or `reused`;
+- optional item `shared` is a shared key (`<kind>:<name>`).
+
+`merge` validates again, then:
+- rejects a line from `results/worker-<n>.jsonl` whose handle is not in `worklists/worker-<n>.json` (when that worklist exists), or is unknown to the state;
+- for a handle found in several result files: keeps the files that created it when they agree on one product IRI and rejects the others; rejects every line of that handle when the created IRIs conflict;
+- writes rejected and malformed lines to `results/rejected-<stamp>.jsonl` with the reason, and prints them;
+- moves merged files to `results/merged/`, so a result line is never applied twice (e.g. after an undo).
 
 ## Commands
 
@@ -87,17 +107,38 @@ S=$SKILL/scripts
 python3 $S/state.py init <dir> --client acme --mcp-url https://...   # refuses if state.json exists
 python3 $S/state.py sync <dir>                                       # new handles from products.json
 python3 $S/state.py decide <dir> --key status_mode --value-json '"draft"'
-python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/1 --status created --module taxonomy
-python3 $S/state.py worklists <dir> --workers 4 [--limit 5 --pilot] [--retry-failed] [--module prices]
-python3 $S/state.py result <dir>/results/worker-1.jsonl --json '<result line>'
+python3 $S/state.py decide <dir> --key taxonomy --value-file taxonomy.json
+python3 $S/state.py shared <dir> --key category:T-shirts --iri /api/categories/019f84f8-0000-7000-8000-000000000001 --status created --module taxonomy
+python3 $S/state.py shared <dir> --file <dir>/tmp/shared/shared.json        # [{"key", "iri", "status", "module"}, ...]
+python3 $S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] [--retry-failed] [--module prices]
+python3 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 python3 $S/state.py merge <dir>
-python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>
+python3 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
 python3 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 python3 $S/state.py reset-deleted <dir>                              # deleted products back to pending
 python3 $S/state.py summary <dir>
+python3 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|all] [--dry-run]
+python3 $S/plan_shared.py <dir> [--ready]
+python3 $S/taxonomy.py preview products.json --source product_category|type [--map m.json] [--drop-root] [--depth 2] [--rename 'Old path=New name'] [--attribute <key>] [--no-attributes]
+python3 $S/taxonomy.py build products.json --source ... <same options> --output taxonomy.json
+python3 $S/metafields.py infer products.json [--output exports/metafield-definitions.csv]
+python3 $S/metafields.py diff products.json exports/metafield-definitions.csv
+python3 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
+python3 $S/verify.py <dir> <handle> --field description --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
 ```
 
+`payload.py` prints the exact MCP bodies of one product (status from `status_mode`, tags joined with `,`, marker, options with positions, variants with their option value names, metafields whose definition is recorded in `shared`). Non-ASCII letters stay literal; invisible or special whitespace characters are printed as `\uXXXX` escapes. With the taxonomy module, the product body holds `category` and `attributes` from `decisions.taxonomy`; with the metafields module, `metafields` follows `decisions.metafields` (transform applied). A missing decision or shared IRI is an error (`--dry-run`: a `<key IRI>` placeholder).
+
+`plan_shared.py` prints the shared elements to create, in order, with `key`, `module`, `operation`, `lookup`, `path`, `body` and `depends_on` (keys not recorded yet, shown as `<key IRI>` placeholders in the body). Keys recorded `created` or `reused` are skipped; `deleted` ones are planned again. `--ready`: only the entries with no pending dependency. `state.py shared --file` checks every entry before recording any.
+
+`taxonomy.py` (`references/taxonomy.md`): `preview` prints the trimmed tree with product counts, products without category with a suggestion, tag attribute candidates and the category count; `build` writes the `decisions.taxonomy` file.
+
+`verify.py` compares a read-back value with `products.json` after normalizing line endings, Unicode composition and outer whitespace, and prints both lengths, both SHA-256 and the first differing position with its context. `sample` lists ~`rate` of the handles (deterministic hash), every handle whose description holds special whitespace or non-ASCII punctuation, and the pilot products.
+
 `worklists` first merges any unmerged results, then writes fresh worklists. Products sharing the same title always go to the same worker, so the orphan rule can never adopt another worker's product.
+- `--handles a,b,c`: explicit selection (combine with `--pilot`). An unknown handle, or one that is not `pending` (`failed` too with `--retry-failed`; with `--module`, a created product missing that module), is an error and the previous worklists are kept.
+- `--pilot` without `--handles`: a representative selection of up to `--limit` products (default 5) covering, when present: several variants, a single variant, a category (`product_category` or `type`), no category, metafields, each source status, the longest description. The rest is filled in order. The `pilot` flag of products not `created` is cleared first, so only the new selection is flagged.
+- `--module <name>`: `created` products with no live item of that module, or whose items tied to a shared element (`"shared"` key) were deleted with no replacement yet.
 
 ## Resume rules
 

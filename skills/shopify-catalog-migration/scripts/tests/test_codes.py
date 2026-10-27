@@ -103,6 +103,54 @@ class CodesTest(unittest.TestCase):
         self.assertEqual(summary["barcodes"], 0)
         self.assertEqual(summary["carried"], 3)
 
+    def test_skip_rules(self):
+        recipe = {"handle": "recipe-cake", "row": 9, "title": "Cake", "type": None, "options": [],
+                  "metafields": {"custom.recipe_steps": "Mix"},
+                  "variants": [{"sku": None, "sku_generated": False, "barcode": None, "price": "0",
+                                "option_values": []}]}
+        self.data["products"].append(recipe)
+        stats = {}
+        codes.apply_fixes(self.data, {"skip_rules": [{"non_sellable": True}, {"handle_pattern": "^mug$"}]}, stats)
+        handles = [p["handle"] for p in self.data["products"]]
+        self.assertNotIn("recipe-cake", handles)
+        self.assertNotIn("mug", handles)
+        self.assertEqual(stats, {'{"non_sellable": true}': 1, '{"handle_pattern": "^mug$"}': 1})
+
+    def test_skip_rule_metafield_prefix(self):
+        self.assertTrue(codes.rule_matches({"handle": "x", "metafields": {"custom.recipe_a": "1"}},
+                                           {"metafield_prefix": "custom.recipe_"}))
+        self.assertFalse(codes.rule_matches({"handle": "x", "metafields": {"custom.recipe_a": None}},
+                                            {"metafield_prefix": "custom.recipe_"}))
+
+    def test_skip_rule_conditions_are_combined(self):
+        self.assertFalse(codes.rule_matches({"handle": "recipe-a", "metafields": {}},
+                                            {"handle_pattern": "^recipe-", "metafield_prefix": "custom."}))
+
+    def test_unknown_skip_rule(self):
+        with self.assertRaises(ValueError):
+            codes.apply_fixes(self.data, {"skip_rules": [{"vendor": "Acme"}]})
+
+    def test_option_names_wildcard(self):
+        codes.apply_fixes(self.data, {"option_names": {"*": {"Size": "Taille"}, "poster": {"Sz": "Format"}}})
+        tshirt = next(p for p in self.data["products"] if p["handle"] == "tshirt-basic")
+        poster = next(p for p in self.data["products"] if p["handle"] == "poster")
+        self.assertEqual(tshirt["options"][0]["name"], "Taille")
+        self.assertEqual(poster["options"][0]["name"], "Format")
+
+    def test_fix_cli_prints_rule_counts(self):
+        import json, subprocess, tempfile
+        script = os.path.join(os.path.dirname(__file__), "..", "codes.py")
+        with tempfile.TemporaryDirectory() as tmp:
+            products_path, fixes_path = os.path.join(tmp, "products.json"), os.path.join(tmp, "fixes.json")
+            with open(products_path, "w") as f:
+                json.dump(self.data, f)
+            with open(fixes_path, "w") as f:
+                json.dump({"skip_rules": [{"handle_pattern": "^(mug|cap)$"}]}, f)
+            result = subprocess.run([sys.executable, script, "fix", products_path, fixes_path],
+                                    capture_output=True, text=True)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn('skipped 2 products by rule {"handle_pattern": "^(mug|cap)$"}', result.stdout)
+
 
 if __name__ == "__main__":
     unittest.main()

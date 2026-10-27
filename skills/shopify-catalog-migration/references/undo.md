@@ -35,7 +35,7 @@ Check each with `describe_operation` before the first call (path argument names)
 
 ## Procedure
 
-1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements), or `all`.
+1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements), `shared:<key>` (one shared element and the product items tied to it, e.g. `shared:metafield_definition:custom.ingredients`), or `all`.
 2. `python3 $SKILL/scripts/state.py merge <dir>` then `python3 $SKILL/scripts/state.py undo-plan <dir> --scope <scope>`.
 3. Show counts per kind and what will be archived instead of deleted. Wait for explicit confirmation: this is destructive.
 4. Walk the plan in order (it is sorted children first). For each step:
@@ -44,5 +44,9 @@ Check each with `describe_operation` before the first call (path argument names)
    - A 409 (still in use) or any other error: record it, do not force, continue.
 5. Write the IRIs actually deleted or archived to `<dir>/undo/deleted-<YYYYMMDD-HHMMSS>.json` (a JSON array), then `python3 $SKILL/scripts/state.py deleted <dir> --iris-file <that file>`.
 6. Report: deleted, archived, already gone, refused (with reason). Products whose `product` item was deleted are now `deleted` in the state; a later run does not recreate them.
+
+Items tied to a shared element carry its key in `"shared"` (metafields record their definition key; taxonomy links record nothing). With `shared:<key>` the plan lists the created items with that key, then the shared element itself if this migration created it.
+
+Expected flow after a wrong metafield type (seen on the pilot, or later): undo `shared:metafield_definition:<namespace.key>`, `state.py decide` the metafields decision with the new type, recreate the definition and record it again with `state.py shared` (same key), then `state.py worklists <dir> --workers 4 --module metafields`: it lists the created products whose items for that key were deleted, and workers create only the missing metafields.
 
 Expected flow after a bad pilot: undo `pilot`, fix the mapping (`state.py decide`), `python3 $SKILL/scripts/state.py reset-deleted <dir>` (deleted products become `pending` again, with no items), then rerun the pilot.

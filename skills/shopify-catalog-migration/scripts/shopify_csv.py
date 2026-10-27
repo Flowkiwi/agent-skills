@@ -16,6 +16,9 @@ METAFIELD_COLUMN = re.compile(r"\(product\.metafields\.([^)]+)\)$")
 MARKET_COLUMN = re.compile(r"^(Price|Compare At Price) / (.+)$")
 VARIANT_COLUMNS = ("Variant SKU", "Variant Price", "Option1 Value")
 MIN_OPTION_NAME_LENGTH = 3
+KNOWN_STATUSES = ("active", "draft", "archived")
+WARNING_ORDER = ("non_sellable",)
+MAX_LISTED_HANDLES = 10
 
 
 def _value(row, column):
@@ -36,6 +39,25 @@ def _int(value):
         return int(float(value))
     except ValueError:
         return None
+
+
+def _is_zero_or_empty(price):
+    if price in (None, ""):
+        return True
+    try:
+        return float(price) == 0
+    except ValueError:
+        return False
+
+
+def is_non_sellable(product):
+    """No priced variant, no SKU from Shopify (generated ones do not count) and no type:
+    usually content pages, recipes or samples stored as products."""
+    return (
+        not product.get("type")
+        and all(_is_zero_or_empty(v.get("price")) for v in product["variants"])
+        and not any(v.get("sku") and not v.get("sku_generated") for v in product["variants"])
+    )
 
 
 def _is_default_title(row):
@@ -119,6 +141,10 @@ def parse(path):
         metafield_columns = {
             c: m.group(1) for c in columns if (m := METAFIELD_COLUMN.search(c))
         }
+        metafield_labels = {
+            key: column[:METAFIELD_COLUMN.search(column).start()].strip() or key
+            for column, key in metafield_columns.items()
+        }
         market_columns = {
             c: (m.group(1), m.group(2)) for c in columns if (m := MARKET_COLUMN.match(c))
         }
@@ -149,9 +175,39 @@ def parse(path):
 
             product["variants"].append(_variant(row, product, market_columns))
 
-    data = {"products": products, "warnings": warnings}
+    data = {"products": products, "warnings": warnings, "metafield_columns": metafield_labels}
     data["warnings"] = warnings + validate(data)
     return data
+
+
+def _handles_text(handles):
+    listed = ", ".join(handles[:MAX_LISTED_HANDLES])
+    return listed + (f" and {len(handles) - MAX_LISTED_HANDLES} more" if len(handles) > MAX_LISTED_HANDLES else "")
+
+
+def _option_name_case(data):
+    forms = {}
+    for product in data["products"]:
+        for option in product["options"]:
+            users = forms.setdefault(option["name"].lower(), {}).setdefault(option["name"], [])
+            if product["handle"] not in users:
+                users.append(product["handle"])
+    warnings = []
+    rows = {p["handle"]: p["row"] for p in data["products"]}
+    for variants in forms.values():
+        if len(variants) < 2:
+            continue
+        majority = max(variants, key=lambda name: len(variants[name]))
+        counts = ", ".join(f"'{name}': {len(handles)}" for name, handles in variants.items())
+        for name, handles in variants.items():
+            if name == majority:
+                continue
+            _warn(
+                warnings, rows[handles[0]], handles[0], "option_name_case",
+                f"Option name '{name}' differs only by case from '{majority}', use '{majority}' "
+                f"(products per form: {counts}; '{name}' in: {_handles_text(handles)})",
+            )
+    return warnings
 
 
 def validate(data):
@@ -160,6 +216,12 @@ def validate(data):
     seen_skus = {}
     for product in data["products"]:
         handle, line = product["handle"], product["row"]
+        if is_non_sellable(product):
+            _warn(warnings, line, handle, "non_sellable",
+                  "No variant price, no SKU and no type: probably not a product (recipe, page, sample)")
+        if product.get("status") is not None and product["status"] not in KNOWN_STATUSES:
+            _warn(warnings, line, handle, "unknown_status",
+                  f"Status '{product['status']}' is not one of {', '.join(KNOWN_STATUSES)}")
         for option in product["options"]:
             if len(option["name"]) < MIN_OPTION_NAME_LENGTH:
                 _warn(
@@ -176,18 +238,23 @@ def validate(data):
                 seen_skus[sku] = handle
             if variant["barcode"] is None:
                 _warn(warnings, line, handle, "missing_barcode", f"Variant {index} has no barcode")
-    return warnings
+    return warnings + _option_name_case(data)
 
 
 def format_warnings(warnings):
     by_code = {}
     for warning in warnings:
         by_code.setdefault(warning["code"], []).append(warning)
+    codes = [c for c in WARNING_ORDER if c in by_code] + [c for c in by_code if c not in WARNING_ORDER]
     lines = []
-    for code, items in by_code.items():
+    for code in codes:
+        items = by_code[code]
         lines.append(f"{code} ({len(items)})")
         for w in items:
             lines.append(f"  row {w['row']} {w['handle']}: {w['message']}")
+        if code == "non_sellable":
+            lines.append("  hint: these products also produce missing_sku (and often missing_barcode) warnings; "
+                         "skipping them with a skip_rules fix clears those too")
     return "\n".join(lines)
 
 

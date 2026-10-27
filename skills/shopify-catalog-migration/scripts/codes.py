@@ -6,15 +6,23 @@ Usage:
   python3 codes.py fill <products.json> --prefix 2 --start 1 [--sku-pattern "{handle}-{index}"] [--previous <old products.json>]
 
 fixes.json: {"skus": {"<handle>": {"<old sku>": "<new sku>"}},
-             "option_names": {"<handle>": {"<old name>": "<new name>"}},
-             "skip": ["<handle>", ...]}
+             "option_names": {"<handle> or *": {"<old name>": "<new name>"}},
+             "skip": ["<handle>", ...],
+             "skip_rules": [{"non_sellable": true}, {"metafield_prefix": "custom.recipe_"},
+                            {"handle_pattern": "^recipe-"}]}
+A product matching any skip rule is skipped (all conditions of one rule must match).
 Generated SKUs are uppercased.
 """
 
 import argparse
 import copy
 import json
+import re
 import sys
+
+from shopify_csv import is_non_sellable
+
+RULE_KEYS = {"non_sellable", "metafield_prefix", "handle_pattern"}
 
 
 def ean13_check_digit(first12):
@@ -45,15 +53,46 @@ def generate_barcodes(prefix, start, count, used):
     return _generate(prefix, start, count, used)[0]
 
 
-def apply_fixes(data, fixes):
+def rule_matches(product, rule):
+    unknown = set(rule) - RULE_KEYS
+    if unknown or not rule:
+        raise ValueError(f"Unknown skip rule {json.dumps(rule)}: use {sorted(RULE_KEYS)}")
+    if "non_sellable" in rule and is_non_sellable(product) != bool(rule["non_sellable"]):
+        return False
+    if "metafield_prefix" in rule and not any(
+        key.startswith(rule["metafield_prefix"]) and value not in (None, "")
+        for key, value in product.get("metafields", {}).items()
+    ):
+        return False
+    if "handle_pattern" in rule and not re.search(rule["handle_pattern"], product["handle"]):
+        return False
+    return True
+
+
+def apply_fixes(data, fixes, stats=None):
+    """Apply fixes.json; `stats` (a dict, optional) receives the number of products skipped per rule."""
+    stats = {} if stats is None else stats
     skip = set(fixes.get("skip", []))
-    data["products"] = [p for p in data["products"] if p["handle"] not in skip]
+    rules = fixes.get("skip_rules", [])
+    kept = []
+    for product in data["products"]:
+        if product["handle"] in skip:
+            stats["skip"] = stats.get("skip", 0) + 1
+            continue
+        matched = next((rule for rule in rules if rule_matches(product, rule)), None)
+        if matched is not None:
+            label = json.dumps(matched, sort_keys=True)
+            stats[label] = stats.get(label, 0) + 1
+            continue
+        kept.append(product)
+    data["products"] = kept
     for product in data["products"]:
         sku_renames = fixes.get("skus", {}).get(product["handle"], {})
         for variant in product["variants"]:
             if variant["sku"] in sku_renames:
                 variant["sku"] = sku_renames[variant["sku"]]
-        name_renames = fixes.get("option_names", {}).get(product["handle"], {})
+        name_renames = dict(fixes.get("option_names", {}).get("*", {}))
+        name_renames.update(fixes.get("option_names", {}).get(product["handle"], {}))
         for option in product["options"]:
             if option["name"] in name_renames:
                 option["name"] = name_renames[option["name"]]
@@ -161,8 +200,15 @@ def main(argv):
     data = _read(args.products)
 
     if args.command == "fix":
-        apply_fixes(data, _read(args.fixes))
+        stats = {}
+        try:
+            apply_fixes(data, _read(args.fixes), stats)
+        except (ValueError, re.error) as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         _write(args.products, data)
+        for label, count in stats.items():
+            print(f"skipped {count} products by {'skip list' if label == 'skip' else 'rule ' + label}")
         print(f"{len(data['products'])} products after fixes")
         return 0
 

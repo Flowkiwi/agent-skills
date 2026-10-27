@@ -24,7 +24,7 @@ Example: `{"published": ["/api/channels/<id>"], "unpublished": []}`.
 
 ## Per product
 
-- `full` mode: pass `channels: [...]` in the `create_product` body (core step 3).
+- `full` mode: pass `channels: [...]` in the `create_product` body (core step 5).
 - `module-only` mode: `get_product`, then `update_product` with `channels` = existing channels + the new ones (merge-patch replaces the whole array, so always send the union). The developer's approval of the migration counts as the confirmation `update_product` requires.
 
 In both modes, record a link item (a link is not a deletable resource, the item tells undo and `worklists --module` that it was done): `{"kind": "channel_link", "iri": "<product iri>#channels", "status": "created", "module": "channels"}`.
