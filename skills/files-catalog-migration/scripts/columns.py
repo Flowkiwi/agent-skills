@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Triage proposal for the columns of the mapped sources (see references/concepts.md).
+"""Triage proposal for the columns of the mapped sources (see SKILL.md Phase 2, before taxonomy and metafields).
 
 Usage: columns.py propose <dir>
 

@@ -84,7 +84,9 @@ class ColumnsTest(unittest.TestCase):
         lines = out.getvalue().splitlines()
         self.assertTrue(lines[0].startswith("| column "))
         self.assertEqual(len({len(line) for line in lines}), 1)
-        self.assertEqual(columns.main(["columns.py", "propose"]), 2)
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            self.assertEqual(columns.main(["columns.py", "propose"]), 2)
+        self.assertIn("Usage: columns.py propose <dir>", err.getvalue())
 
 
 if __name__ == "__main__":
