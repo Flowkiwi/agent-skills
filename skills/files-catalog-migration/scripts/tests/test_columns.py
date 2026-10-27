@@ -89,5 +89,64 @@ class ColumnsTest(unittest.TestCase):
         self.assertIn("Usage: columns.py propose <dir>", err.getvalue())
 
 
+def column(**changes):
+    base = {"letter": "B", "kind": "text", "flags": [], "fill_rate": 1.0, "max_length": 10, "distinct": 3,
+            "filled": 10}
+    base.update(changes)
+    return base
+
+
+SAME_AS_A = [{"flag": "same_values", "with": "A"}]
+URL_LABEL = [{"flag": "label_mismatch", "expected": "url", "matching": 0.0}]
+
+
+class TriageRulesTest(unittest.TestCase):
+    CASES = [  # (rule, column, sheet columns, expected)
+        ("2 empty", column(flags=[{"flag": "empty"}], fill_rate=0.0), None, ("ignore", None, "empty")),
+        ("2 sparse", column(fill_rate=0.1), None, ("ignore", None, "sparse")),
+        ("3 duplicate", column(flags=SAME_AS_A), None, ("ignore", None, "duplicate of A")),
+        ("3 constant value", column(flags=SAME_AS_A, distinct=1), None, ("attribute", "list", "1 distinct values")),
+        ("3 two yes/no columns", column(flags=SAME_AS_A, kind="boolean", distinct=2),
+         [column(letter="A", kind="boolean")], ("attribute", "list", "yes/no values")),
+        ("3 yes/no copy of a text column", column(flags=SAME_AS_A, kind="boolean", distinct=2),
+         [column(letter="A")], ("ignore", None, "duplicate of A")),
+        ("5 long text under a url label", column(flags=URL_LABEL, max_length=300), None,
+         ("description", None, "long text under a label that says url")),
+        ("5 short text under a url label", column(flags=URL_LABEL), None,
+         ("ignore", None, "label says url, content is text")),
+        ("6 urls", column(kind="url"), None, ("ignore", None, "media: URLs listed in the final report")),
+        ("7 html", column(kind="html"), None, ("description", None, "html")),
+        ("7 long text", column(max_length=300), None, ("description", None, "long text")),
+        ("10 few distinct values", column(distinct=6, filled=8), None, ("attribute", "list", "6 distinct values")),
+        ("10 half of the filled cells", column(distinct=10, filled=20), None, ("attribute", "list", "10 distinct values")),
+        ("11 too many for few cells", column(distinct=7, filled=10), None, ("attribute", "string", "free text")),
+        ("11 over 20 distinct values", column(distinct=21, filled=100), None, ("attribute", "string", "free text")),
+    ]
+
+    def test_rules(self):
+        for rule, col, sheet, expected in self.CASES:
+            with self.subTest(rule=rule):
+                self.assertEqual(columns.triage(col, ["v"], sheet), expected)
+
+
+class FormatTableTest(unittest.TestCase):
+    def entry(self, letter, role, label="Label", reason="r", kind=None):
+        return {"column": "main:" + letter.lower(), "letter": letter, "label": label, "role": role, "type": kind,
+                "reason": reason}
+
+    def test_sorted_by_role_then_letter_and_cut(self):
+        entries = [self.entry("A", "ignore"), self.entry("B", "core", label="L" * 100),
+                   self.entry("C", "attribute", kind="list__single_line_text_field"), self.entry("D", "core"),
+                   self.entry("AA", "metafield", reason="x" * 80)]
+        lines = columns.format_table(entries).splitlines()
+        self.assertEqual([line.split("|")[1].strip() for line in lines[2:]],
+                         ["main:b", "main:d", "main:c", "main:aa", "main:a"])
+        self.assertEqual(len({len(line) for line in lines}), 1)
+        self.assertIn(" " + "L" * 37 + "... |", lines[2])
+        self.assertIn(" " + "x" * 57 + "... |", lines[5])
+        self.assertIn(" list__single_line_text_field |", lines[4])
+        self.assertEqual(entries[1]["label"], "L" * 100)
+
+
 if __name__ == "__main__":
     unittest.main()

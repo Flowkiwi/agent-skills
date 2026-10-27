@@ -5,7 +5,9 @@ Usage: columns.py propose <dir>
 
 Reads inventory.json and mappings/products.json; writes tmp/columns-proposal.json and prints, for every
 column of every mapped source, a role (core, attribute, metafield, description or ignore), a type and
-the reason. The proposal is a starting point for the conversation with the user, not a decision.
+the reason. The proposal is a starting point for the conversation with the user, not a decision. The table
+is sorted by role, then source and letter; long cells are cut with "..." in the table only (the JSON file
+keeps them whole).
 """
 import json
 import os
@@ -24,6 +26,8 @@ DESCRIPTION_LENGTH = 255
 LIST_MAX_DISTINCT = 20
 LIST_MIN_DISTINCT = 6
 PROPOSAL = os.path.join("tmp", "columns-proposal.json")
+ROLES = ("core", "attribute", "metafield", "description", "ignore")
+MAX_WIDTHS = {"column": 40, "label": 40, "reason": 60}
 
 
 def referenced(m: dict, loaded: dict) -> Set[Tuple[str, int]]:
@@ -39,15 +43,24 @@ def first_flag(column: dict, name: str) -> Optional[dict]:
     return next((f for f in column["flags"] if f["flag"] == name), None)
 
 
-def triage(column: dict, values: List[str]) -> Tuple[str, Optional[str], str]:
-    """(role, type, reason) of a column that the mapping does not read."""
+def is_duplicate(column: dict, same: Optional[dict], columns: Optional[List[dict]]) -> bool:
+    """A same_values flag means a duplicate, unless the column holds one constant value or both columns are
+    yes/no columns (two characteristics that happen to agree)."""
+    if same is None or column["distinct"] <= 1:
+        return False
+    other = next((c for c in columns or [] if c.get("letter") == same["with"]), None)
+    return not (column["kind"] == "boolean" and other is not None and other.get("kind") == "boolean")
+
+
+def triage(column: dict, values: List[str], columns: Optional[List[dict]] = None) -> Tuple[str, Optional[str], str]:
+    """(role, type, reason) of a column that the mapping does not read; columns: the other columns of its sheet."""
     kind = column["kind"]
     if first_flag(column, "empty"):
         return "ignore", None, "empty"
     if column["fill_rate"] < SPARSE_BELOW:
         return "ignore", None, "sparse"
     same = first_flag(column, "same_values")
-    if same:
+    if is_duplicate(column, same, columns):
         return "ignore", None, "duplicate of %s" % same["with"]
     similar = first_flag(column, "similar_label")
     if similar:
@@ -95,11 +108,12 @@ def propose(directory: str) -> List[dict]:
     used = referenced(m, loaded)
     entries = []  # type: List[dict]
     for source_id, source in loaded.items():
-        for index, column in enumerate(sheet_of(inv, source)["columns"]):
+        sheet_columns = sheet_of(inv, source)["columns"]
+        for index, column in enumerate(sheet_columns):
             if (source_id, index) in used:
                 role, kind_type, reason = "core", None, "used by products"
             else:
-                role, kind_type, reason = triage(column, column_values(source, index))
+                role, kind_type, reason = triage(column, column_values(source, index), sheet_columns)
             name = column["code"] or column["label"] or "@" + column_letter(index)
             entries.append({"column": "%s:%s" % (source_id, name), "letter": column["letter"],
                             "label": column["label"], "role": role, "type": kind_type, "reason": reason})
@@ -114,9 +128,16 @@ def read_inventory(directory: str) -> dict:
         return json.load(f)
 
 
+def cut(text: str, width: Optional[int]) -> str:
+    return text if width is None or len(text) <= width else text[:width - 3] + "..."
+
+
 def format_table(entries: List[dict]) -> str:
-    rows = [("column", "label", "role", "type", "reason")]
-    rows += [(e["column"], e["label"] or "", e["role"], e["type"] or "-", e["reason"]) for e in entries]
+    header = ("column", "label", "role", "type", "reason")
+    ordered = sorted(entries, key=lambda e: ROLES.index(e["role"]) if e["role"] in ROLES else len(ROLES))
+    rows = [header]
+    rows += [tuple(cut(cell, MAX_WIDTHS.get(name)) for name, cell in zip(header, (
+        e["column"], e["label"] or "", e["role"], e["type"] or "-", e["reason"]))) for e in ordered]
     widths = [max(len(row[i]) for row in rows) for i in range(5)]
 
     def line(row):
