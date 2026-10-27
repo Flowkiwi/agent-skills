@@ -91,7 +91,12 @@ Procedure:
 A concept taken after the products were created (Start or resume, **add a concept**): run Phase 2 for it (its `concepts/<concept>.json` recorded with `state.py decide`), the dry-run (`Concepts` and `Blocking` sections), then the shared elements (step 3: the same `plan_shared.py` loop, keys already recorded are skipped). Then:
 
 1. `$S/state.py worklists <dir> --workers 4 --module <concept>`: the `created` products without a live item of that module (`--pilot` first on a few of them).
-2. Workers as in SKILL.md "Running workers", with `{{PER_PRODUCT}}` = the `## Per product` section of the concept reference (module-only mode: `$S/payload.py <dir> <handle> --step taxonomy|collections|metafields|prices`; `metafields` for the metaobject references too), with `$SKILL` replaced by the skill path. Each result line carries `"module": "<concept>"`: `state.py merge` then adds the items and a per-module error without changing the product status.
+2. Workers as in SKILL.md "Running workers", with `{{PER_PRODUCT}}` built from three parts, in this order, with `$S` replaced by `python3 <skill path>/scripts` and `$SKILL` by the skill path (workers only see the prompt):
+   - this note, `<concept>` filled in: `Module-only run for the concept <concept>: every product of your worklist already exists: its IRI is products.<handle>.iri in the state file, and its variants are the "variant" items there (ref = SKU). Every result line has a top-level "module": "<concept>" key next to "handle", "status", "iri", "items" and "error"; on failure, "status": "failed" with the error, the product itself is not touched.`
+   - the **Created vs reused** paragraph of `## Per product` above;
+   - the `## Per product` section of the concept reference (module-only mode: `$S/payload.py <dir> <handle> --step taxonomy|collections|metafields|prices`; `metafields` for the metaobject references too).
+
+   The top-level `module` key is what makes `state.py merge` add the items and record a per-module error without changing the product status: a line without it is a full run, and a failure would turn the created product into `failed`.
 3. `$S/state.py merge <dir>`, then `$S/state.py summary <dir>` for the report.
 
 A product with nothing to send for the concept gets no item, so it is listed again by the next `--module` run: check the payload before dispatching a second run.
