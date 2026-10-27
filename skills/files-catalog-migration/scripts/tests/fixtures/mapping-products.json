@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "concept": "products",
+  "sources": {
+    "main": {"file": "demo-catalogue.xlsx", "sheet": "Catalogue"},
+    "prices": {"file": "demo-tarifs.csv", "join": {"column": "prices:SKU", "to": "main:sku_marchand"}}
+  },
+  "key": {"from": ["main:sku_marchand", "main:ref_com", "main:ean"]},
+  "group": {
+    "key": {"from": ["main:ref_com", "main:sku_marchand"]},
+    "origin": "agent",
+    "reason": "Les lignes de même référence commerciale sont les coloris d'un même modèle."
+  },
+  "product": {
+    "title": {"from": ["main:accroche"], "transform": [{"regex": "^(.+?)(?: - (?:Noir|Rouge))?$"}]},
+    "description_html": {"from": ["main:descriptif"]},
+    "vendor": {"from": ["main:marque"]},
+    "product_category": {"from": ["main:categorie"]},
+    "images": {"from": ["main:visuel_princ"], "pick": "all"}
+  },
+  "options": [{"name": "Couleur", "value": {"from": ["main:coloris"]}}],
+  "variant": {
+    "sku": {"from": ["main:sku_marchand"]},
+    "barcode": {"from": ["main:ean"]},
+    "price": {"from": ["prices:Prix public TTC", "main:prix"], "transform": ["decimal"]},
+    "compare_at_price": {"from": ["prices:Prix barré"], "transform": ["decimal"]}
+  }
+}

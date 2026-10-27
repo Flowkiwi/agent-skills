@@ -1,6 +1,6 @@
 # Mappings: declarative field specs
 
-A mapping says, for one concept (`products`, then taxonomy, collections, metafields...), which source columns give each Flowkiwi field and how their values are converted. It lives in `<dir>/mappings/<concept>.json` (UTF-8) and is read by `scripts/mapping.py` and the extraction script (extract.py).
+A mapping says, for one concept (`products`, then taxonomy, collections, metafields...), which source columns give each Flowkiwi field and how their values are converted. It lives in `<dir>/mappings/<concept>.json` (UTF-8) and is read by `scripts/mapping.py`; `$S/extract.py <dir> <concept>` applies it (`$S/extract.py <dir> products` for the products).
 
 > [!IMPORTANT]
 > A mapping is the source of truth: to change an extracted value, change the mapping (or `fixes.json`) and re-extract. Never edit the output file.
