@@ -197,6 +197,30 @@ class PhaseDetailsTest(unittest.TestCase):
         self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006"])
         self.assertEqual(diff.diff(self.st, self.products)["unmanaged_items"], {"2230": ["variants.removed.1006"]})
 
+    def test_updated_line_leaves_out_a_deferred_variant(self):
+        countries = [{"code": "FR", "country": "/api/countries/00000000-0000-4000-8000-000000000010",
+                      "tax": "/api/taxes/00000000-0000-4000-8000-000000000011", "currency": "EUR"}]
+        offers = {"1005": {"FR": {"taxExcludedPrice": "30.00"}}, "1006": {"FR": {"taxExcludedPrice": "31.00"}}}
+        state.decide(self.st, "prices", {"offers": {"2230": offers}, "countries": countries}, "developer")
+        state.merge(self.st, [created_line("2230")], self.products)
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["options"][0]["values"] += ["Bleu", "Vert"]
+        duo["variants"] += [{"sku": "1007", "barcode": "3601234560074", "option_values": ["Bleu"]},
+                            {"sku": "1008", "barcode": "3601234560081", "option_values": ["Vert"]}]
+        offers["1007"] = {"FR": {"taxExcludedPrice": "32.00"}}
+        state.decide(self.st, "prices", {"offers": {"2230": offers}, "countries": countries}, "developer")
+        created = {"kind": "variant", "iri": variant_iri("2230", "1008"), "status": "created", "module": "core",
+                   "ref": "1008"}
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[created])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006", "1008"])
+        self.assertEqual([p["sku"] for p in written["prices"]], ["1005", "1006"])
+        self.assertEqual([v["value"] for v in written["options"][0]["values"]], ["Noir", "Rouge", "Vert"])
+        change = diff.diff(self.st, self.products)["changed"]["2230"]
+        self.assertEqual((change["variants"], change["prices"], change["options"]),
+                         ({"added": ["1007"]}, {"added": ["1007:FR"]}, {"values_added": {"Couleur": ["Bleu"]}}))
+
     def test_created_line_snapshot_unchanged_with_reused_children(self):
         line = created_line("2230")
         line["items"][2]["status"] = "reused"

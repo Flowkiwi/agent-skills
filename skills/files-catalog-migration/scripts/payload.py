@@ -40,7 +40,8 @@ A product modified in Flowkiwi (diff.json conflicts) needs decision force_update
 SKU is still a created variant of another product (diff.json moved, rekeyed, two products swapping SKUs) is left
 out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
 `held_by` is merged, print the plan again: children already deleted or recorded are left out, so it only holds
-what is still to do (and the field updates, sent again as they are).
+what is still to do (and the field updates, sent again as they are). A product never deletes a SKU (rekeyed
+deletion, `from` side of a moved SKU) while a product receiving it has an unforced conflict.
 """
 
 import argparse
@@ -498,6 +499,10 @@ def _changed_plan(products, state, diff_data, handle, entry):
         "prices": _keyed_update(change.get("prices", {}), now.get("prices") or [], children,
                                 "sale_offer", lambda e: f"{e['sku']}:{e['country']}", "ref"),
     }
+    deleted = {v["sku"] for v in groups["variants"]["delete"]}
+    for moved in diff_data.get("moved") or []:
+        if moved.get("from") == handle and moved.get("sku") in deleted:
+            _check_receivers(state, diff_data, handle, [moved["sku"]], moved.get("to") or [])
     # A SKU still held by another product (moved, swapped, rekeyed into this one) waits for its deletion there;
     # every other operation, this product's own deletions included, goes on.
     deferred = []
@@ -518,11 +523,27 @@ def _changed_plan(products, state, diff_data, handle, entry):
     return plan
 
 
+def _conflicted(state, diff_data, handle):
+    return handle in (diff_data.get("conflicts") or {}) and not state_module.forced(state, handle)
+
+
+def _check_receivers(state, diff_data, handle, skus, receivers):
+    """The SKUs `handle` gives away must reach their receivers: none may be blocked by an unforced conflict."""
+    for target in receivers:
+        if _conflicted(state, diff_data, target):
+            raise PayloadError(f"'{handle}' cannot delete SKU {', '.join(skus)} yet: '{target}' receives it and was "
+                               "modified in Flowkiwi since the last import (see diff.json conflicts): "
+                               "force_update or resolve the conflict first")
+
+
 def _removed_plan(state, diff_data, handle, entry):
     phase = state.get("phase", 1)
     if (diff_data.get("removal") or {}).get(handle) == "delete_rekeyed":
         if state_module.phase_decision(state, "confirmed_rekey") is None:
             raise PayloadError(f"rekeyed products need decision confirmed_rekey for phase {phase}")
+        for rekey in diff_data.get("rekeyed") or []:
+            if rekey.get("removed") == handle:
+                _check_receivers(state, diff_data, handle, rekey.get("skus") or [], rekey.get("changed") or [])
         action = "delete"
     else:
         decision = state_module.phase_decision(state, "removed_action")
@@ -549,7 +570,7 @@ def update_plan(products, state, diff_data, handle):
     removed = handle in diff_data.get("removed", []) or handle in diff_data.get("already_archived", [])
     if entry is None or not (changed or removed):
         raise PayloadError(f"'{handle}' is not in diff.json changed or removed")
-    if handle in (diff_data.get("conflicts") or {}) and not state_module.forced(state, handle):
+    if _conflicted(state, diff_data, handle):
         raise PayloadError(f"'{handle}' was modified in Flowkiwi since the last import (see diff.json conflicts): "
                            "force it with decision force_update")
     if removed:

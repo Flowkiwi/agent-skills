@@ -272,6 +272,67 @@ class UpdatePlanDetailsTest(unittest.TestCase):
                           [v["sku"] for v in second["variants"]["create"]]), (["1006"], ["1001"]))
         self.assertNotIn("deferred", first)
 
+    def updated_line(self, handle, items=(), deleted=()):
+        return {"handle": handle, "status": "updated", "iri": product_iri(handle), "error": None,
+                "items": list(items), "deleted": list(deleted)}
+
+    def test_swap_deferred_creates_stay_pending_after_pass_one(self):
+        self.create("2226")
+        self.create("2230")
+        state.start_phase(self.st)
+        toaster, duo = product(self.products, "2226"), product(self.products, "2230")
+        one, six = toaster["variants"][0], duo["variants"][1]
+        toaster["variants"] = [dict(six, option_values=[])]
+        duo["variants"] = [duo["variants"][0], dict(one, option_values=["Rouge"])]
+        d = diff.diff(self.st, self.products)
+        lines = []
+        for handle in ("2226", "2230"):
+            plan = payload.update_plan(self.products, self.st, d, handle)
+            lines.append(self.updated_line(handle, deleted=[v["iri"] for v in plan["variants"]["delete"]]))
+        state.merge(self.st, lines, self.products)
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["changed"]["2226"]["variants"], d["changed"]["2230"]["variants"]),
+                         ({"added": ["1006"]}, {"added": ["1001"]}))
+        plan = payload.update_plan(self.products, self.st, d, "2226")
+        self.assertEqual(([v["sku"] for v in plan["variants"]["create"]], "deferred" in plan), (["1006"], False))
+        state.merge(self.st, [self.updated_line("2226", [item("2226", "variant", "1006")])], self.products)
+        self.assertNotIn("2226", diff.diff(self.st, self.products)["changed"])
+
+    def rekey_into_2226(self):
+        self.create("2226")
+        self.create("2230")
+        state.start_phase(self.st)
+        duo = product(self.products, "2230")
+        product(self.products, "2226")["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
+        self.products["products"] = [product(self.products, "2226")]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["removal"], d["rekeyed"][0]["changed"]), ({"2230": "delete_rekeyed"}, ["2226"]))
+        return d
+
+    def test_rekeyed_deletion_waits_for_a_conflicted_target(self):
+        d = self.rekey_into_2226()
+        d["conflicts"] = {"2226": {"title": {"written": "a", "flowkiwi": "b"}}}
+        state.decide(self.st, "confirmed_rekey", {"phase": 2}, "developer")
+        with self.assertRaisesRegex(payload.PayloadError, "'2230' cannot delete SKU 1005, 1006 yet: '2226' receives "
+                                                          "it .* force_update or resolve the conflict first"):
+            payload.update_plan(self.products, self.st, d, "2230")
+        state.decide(self.st, "force_update", {"phase": 2, "handles": ["2226"]}, "developer")
+        self.assertEqual(payload.update_plan(self.products, self.st, d, "2230")["action"], "delete")
+
+    def test_moved_deletion_waits_for_a_conflicted_receiver(self):
+        self.create("2226")
+        self.create("2230")
+        state.start_phase(self.st)
+        moved = product(self.products, "2230")["variants"].pop()
+        product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))
+        d = diff.diff(self.st, self.products)
+        d["conflicts"] = {"2226": {"title": {"written": "a", "flowkiwi": "b"}}}
+        with self.assertRaisesRegex(payload.PayloadError, "'2230' cannot delete SKU 1006 yet: '2226' receives it"):
+            payload.update_plan(self.products, self.st, d, "2230")
+        state.decide(self.st, "force_update", {"phase": 2, "handles": ["2226"]}, "developer")
+        plan = payload.update_plan(self.products, self.st, d, "2230")
+        self.assertEqual(plan["variants"]["delete"], [{"iri": variant_iri("2230", "1006"), "sku": "1006"}])
+
     def test_deferred_sku_keeps_its_prices_for_later(self):
         countries = [{"code": "FR", "country": "/api/countries/00000000-0000-4000-8000-000000000010",
                       "tax": "/api/taxes/00000000-0000-4000-8000-000000000011", "currency": "EUR"}]

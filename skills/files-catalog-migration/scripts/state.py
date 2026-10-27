@@ -369,11 +369,34 @@ def _keep_reused(built, previous, product):
     return built
 
 
+def _leave_out_unwritten(built, previous, product):
+    """An update run may defer the creation of a variant (its SKU still held by another product): a variant with
+    no live item and not written before was not written, nor its prices and the option values only it uses, so
+    the next diff still finds them to create."""
+    live = {(i["kind"], i["ref"]) for i in product["items"]
+            if i.get("status") in ("created", "reused") and i.get("ref")}
+    before = {v["sku"] for v in previous.get("variants") or []}
+    unwritten = {v["sku"] for v in built.get("variants") or []
+                 if v["sku"] not in before and ("variant", v["sku"]) not in live}
+    if not unwritten:
+        return built
+    built["variants"] = [v for v in built["variants"] if v["sku"] not in unwritten]
+    if "prices" in built:
+        built["prices"] = [p for p in built["prices"] if p["sku"] not in unwritten]
+    old_values = {(o["title"], v["value"]) for o in previous.get("options") or [] for v in o["values"]}
+    for index, option in enumerate(built.get("options") or []):
+        used = {v["option_values"][index] for v in built["variants"] if index < len(v["option_values"])}
+        option["values"] = [v for v in option["values"]
+                            if v["value"] in used or (option["title"], v["value"]) in old_values
+                            or ("option_value", f"{option['title']}:{v['value']}") in live]
+    return built
+
+
 def _snapshot(state, products, handle, line):
     """Record what was written for the product: its payload as payload.py prints it now. An archive run only
     wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json).
     A module-only run only refreshes its part of the previous snapshot (none recorded: none written). An update
-    run keeps the previous entries of the reused children it never wrote."""
+    run keeps the previous entries of the reused children it never wrote and leaves out its deferred variants."""
     import payload  # function-level: payload imports state
 
     product = state["products"][handle]
@@ -392,7 +415,7 @@ def _snapshot(state, products, handle, line):
         else:
             built = payload.build(products, state, handle)
             if line["status"] == "updated" and previous is not None:
-                built = _keep_reused(built, previous, product)
+                built = _leave_out_unwritten(_keep_reused(built, previous, product), previous, product)
     except (payload.PayloadError, KeyError, TypeError, ValueError) as error:
         print(f"warning: no written snapshot for {handle}: {error}", file=sys.stderr)
         return
