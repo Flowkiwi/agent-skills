@@ -171,6 +171,22 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         self.assertEqual([v["value"] for v in plan["options"]["values_delete"]], ["Noir", "Rouge"])
         self.assertEqual(plan["variants"]["update"][0]["option_values"], [])
 
+    def test_renamed_option_links_the_variants_again(self):
+        self.create("2230", item("2230", "product_option", "Couleur"), item("2230", "option_value", "Couleur:Noir"),
+                    item("2230", "option_value", "Couleur:Rouge"))
+        state.start_phase(self.st)
+        product(self.products, "2230")["options"] = [{"name": "Coloris", "values": ["Noir", "Rouge"]}]
+        plan = self.plan("2230")
+        self.assertEqual(plan["options"]["create"],
+                         [{"title": "Coloris", "position": 0,
+                           "values": [{"value": "Noir", "position": 0}, {"value": "Rouge", "position": 1}]}])
+        self.assertEqual(plan["variants"]["update"],
+                         [{"iri": variant_iri("2230", "1005"), "sku": "1005", "body": {}, "option_values": ["Noir"]},
+                          {"iri": variant_iri("2230", "1006"), "sku": "1006", "body": {}, "option_values": ["Rouge"]}])
+        self.assertEqual([v["value"] for v in plan["options"]["values_delete"]], ["Noir", "Rouge"])
+        self.assertEqual(plan["options"]["delete"],
+                         [{"iri": child_iri("2230", "product_option", "Couleur"), "title": "Couleur"}])
+
     def test_value_still_used_is_kept(self):
         self.create("2230", item("2230", "product_option", "Couleur"), item("2230", "option_value", "Couleur:Rouge"))
         state.start_phase(self.st)

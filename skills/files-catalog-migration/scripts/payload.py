@@ -32,7 +32,9 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
   "prices": {"delete", "update", "create"}}, empty groups left out. Applied in this order: product, options
   create and values_create, variants delete, update, create, options values_delete and delete, metafields
   delete, update, create, prices delete (an offer gone with its deleted variant is already deleted), update,
-  create. Existing children are the `created` items of the state by `ref`; a reused child is never written.
+  create. Existing children are the `created` items of the state by `ref`; a reused child is never written. When
+  options are added or removed (a renamed option too), every existing variant is in variants.update with its
+  option_values, linked to the new values before the old option values are deleted.
 - removed: {"handle", "action": "archive", "iri", "product": {"body": {"status": ARCHIVED}}} or
   {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
   the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey, and a
@@ -457,6 +459,24 @@ def _variants_update(change, now, children, kept=frozenset()):
         if "option_values" in fields:
             entry["option_values"] = list(variant["option_values"])
         group["update"].append(entry)
+    options = change.get("options", {})
+    if options.get("added") or options.get("removed"):
+        # a new or removed option (a renamed one): every variant is linked again to the values of the options now,
+        # before the old option and its values are deleted
+        listed = {e["sku"]: e for e in group["update"]}
+        group["update"] = []
+        for variant in now.get("variants") or []:
+            sku = variant["sku"]
+            if sku in variants.get("added", []):
+                continue
+            entry = listed.get(sku)
+            if entry is None:
+                iri = children.target("variant", sku)
+                if iri is None:
+                    continue
+                entry = {"iri": iri, "sku": sku, "body": {}}
+            entry["option_values"] = list(variant["option_values"])
+            group["update"].append(entry)
     return group
 
 
