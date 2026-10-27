@@ -2,6 +2,7 @@ import json
 import os
 import sys
 import tempfile
+import time
 import unittest
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -125,6 +126,19 @@ class ConflictsTest(unittest.TestCase):
             "metafields./api/metafield_definitions/n": {"written": None, "flowkiwi": '"Note"'},
         })
 
+    def test_null_lists_and_metafields_without_definition_are_not_compared(self):
+        written = self.written()
+        written["metafields"] = [{"key": "custom.a", "body": {"definition": "/api/metafield_definitions/a",
+                                                              "value": "x"}}]
+        snap = self.snapshot()
+        snap["variants"] = None
+        snap["metafields"] = None
+        self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
+        self.assertNotIn("variants", diff.remote_view(snap))
+        snap["metafields"] = [{"definition": "/api/metafield_definitions/a", "value": "x"},
+                              {"@id": "/api/metafields/9", "value": "orphan"}, {"definition": None, "value": "y"}]
+        self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
+
     def test_marker_is_part_of_what_was_written(self):
         written = self.written()
         written["marker"] = {"shared": "metafield_definition:import.key",
@@ -186,6 +200,38 @@ class ConflictsCliTest(unittest.TestCase):
         write_json(os.path.join(self.dir, "tmp", "remote", "2230.json"), snap)
         run("diff.py", "conflicts", self.dir)
         self.assertEqual(list(read_json(self.diff_path)["conflicts"]), ["2230"])
+
+    def test_cli_covers_already_archived_handles(self):
+        gone = {"products": self.products["products"][:1]}
+        state.sync_products(self.st, gone)
+        state.merge(self.st, [dict(created_line("2230"), status="archived", items=[])], gone)
+        write_workspace(self.dir, gone, self.st)
+        run("diff.py", self.dir)
+        self.assertEqual(read_json(self.diff_path)["already_archived"], ["2230"])
+        run("diff.py", "conflicts", self.dir)
+        self.assertEqual(read_json(self.diff_path)["missing_snapshots"], ["2230"])
+        snap = remote_of(self.st["products"]["2230"]["written"]["payload"])
+        snap["product"]["status"] = {"@id": "/api/statuses/ACTIVE"}
+        write_json(os.path.join(self.dir, "tmp", "remote", "2230.json"), snap)
+        result = run("diff.py", "conflicts", self.dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        status = {"written": "/api/statuses/ARCHIVED", "flowkiwi": "/api/statuses/ACTIVE"}
+        self.assertEqual(read_json(self.diff_path)["conflicts"], {"2230": {"status": status}})
+
+    def test_cli_snapshot_older_than_the_phase_is_missing(self):
+        path = os.path.join(self.dir, "tmp", "remote", "2226.json")
+        state.start_phase(self.st)
+        write_workspace(self.dir, self.products, self.st)
+        run("diff.py", self.dir)
+        old = time.time() - 3600
+        os.utime(path, (old, old))
+        result = run("diff.py", "conflicts", self.dir)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(read_json(self.diff_path)["missing_snapshots"], ["2226", "2230"])
+        self.assertIn("missing snapshots: 2226, 2230 (absent or read before phase 2 started)", result.stdout)
+        write_json(path, remote_of(self.written["2226"]))
+        run("diff.py", "conflicts", self.dir)
+        self.assertEqual(read_json(self.diff_path)["missing_snapshots"], ["2230"])
 
     def test_cli_shows_forced_handles(self):
         snap = remote_of(self.written["2226"])

@@ -9,10 +9,11 @@ handle with its changed paths. The payload written for each product (state `writ
 state.py merge) is compared with payload.py's payload now, `<key IRI>` placeholders for shared elements not
 recorded yet (a new shared element is a real change).
 
-`conflicts` compares, for each handle of `changed` and `removed`, what the last import wrote with the
-Flowkiwi read-back snapshot <dir>/tmp/remote/<handle>.json (`{"product": <get_product response>,
-"variants": [<list_product_variants items>], "metafields": [<list_metafields items>]}`), fills `conflicts`
-and `missing_snapshots` in diff.json and prints them. A field absent from the snapshot is not compared.
+`conflicts` compares, for each handle of `changed`, `removed` and `already_archived`, what the last import
+wrote with the Flowkiwi read-back snapshot <dir>/tmp/remote/<handle>.json (`{"product": <get_product
+response>, "variants": [<list_product_variants items>], "metafields": [<list_metafields items>]}`), fills
+`conflicts` and `missing_snapshots` in diff.json and prints them. A field absent from the snapshot is not
+compared; a snapshot older than the start of the current phase counts as missing.
 
 diff.json:
   phase             the state phase the difference was computed for
@@ -38,7 +39,8 @@ diff.json:
   errors            {"<handle>": "<message>"}: payload.py cannot build the product now
   conflicts         {"<handle>": {"<path>": {"written", "flowkiwi"}}}: modified in Flowkiwi since the last import
                     (filled by the conflicts step; never updated, archived or deleted unless forced)
-  missing_snapshots handles of changed or removed without a snapshot (filled by the conflicts step)
+  missing_snapshots handles of changed, removed or already_archived without a snapshot read in the current
+                    phase (filled by the conflicts step)
 Deleted handles never appear.
 """
 
@@ -46,6 +48,7 @@ import json
 import os
 import sys
 import tempfile
+from datetime import datetime, timezone
 
 import payload
 import state
@@ -357,7 +360,8 @@ def _variants_view(variants):
 
 
 def _metafields_view(entries):
-    return {_iri(e.get("definition")): _json_text(e.get("value")) for e in entries if isinstance(e, dict)}
+    return {_iri(e["definition"]): _json_text(e.get("value")) for e in entries
+            if isinstance(e, dict) and e.get("definition")}
 
 
 def written_view(written):
@@ -373,13 +377,14 @@ def written_view(written):
 
 
 def remote_view(snapshot):
-    """The Flowkiwi read-back snapshot in the shape of written_view; a key absent from it stays absent."""
+    """The Flowkiwi read-back snapshot in the shape of written_view; a key absent from it (or null for the
+    variant and metafield lists) stays absent."""
     product = snapshot.get("product") or {}
     view = {name: _view(name, product[name]) for name in PRODUCT_FIELDS if name in product}
-    if "variants" in snapshot:
+    if snapshot.get("variants") is not None:
         view["variants"] = _variants_view(snapshot["variants"])
-    if "metafields" in snapshot:
-        view["metafields"] = _metafields_view(snapshot["metafields"] or [])
+    if snapshot.get("metafields") is not None:
+        view["metafields"] = _metafields_view(snapshot["metafields"])
     return view
 
 
@@ -441,6 +446,18 @@ def report(result):
     return "\n".join(lines)
 
 
+def phase_started(state_data):
+    """Start of the current phase as a timestamp, None when unknown."""
+    current = state_data.get("phase", 1)
+    started = next((p.get("started_at") for p in state_data.get("phases") or [] if p.get("n") == current), None)
+    if started is None and current == 1:
+        started = state_data.get("started_at")
+    try:
+        return datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=timezone.utc).timestamp()
+    except (TypeError, ValueError):
+        return None
+
+
 def conflicts_report(diff_data, state_data, not_compared):
     found, missing = diff_data["conflicts"], diff_data["missing_snapshots"]
     lines = [f"conflicts: {len(found)} modified in Flowkiwi since the last import, {len(missing)} snapshot(s) missing"]
@@ -448,7 +465,8 @@ def conflicts_report(diff_data, state_data, not_compared):
         label = f"{handle} (forced)" if forced(state_data, handle) else handle
         lines.append(f"  {label}: {', '.join(paths)}")
     if missing:
-        lines.append(f"missing snapshots: {', '.join(missing)}")
+        lines.append(f"missing snapshots: {', '.join(missing)} "
+                     f"(absent or read before phase {state_data.get('phase', 1)} started)")
     if not_compared:
         lines.append(f"no written snapshot, not compared: {', '.join(not_compared)}")
     return "\n".join(lines)
@@ -469,10 +487,14 @@ def conflicts_main(args):
     if diff_data.get("phase") != state_data.get("phase", 1):
         print(f"error: diff.json is from phase {diff_data.get('phase')}, run diff.py again", file=sys.stderr)
         return 1
+    started = phase_started(state_data)
     found, missing, not_compared = {}, [], []
-    for handle in list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or []):
+    handles = (list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or [])
+               + list(diff_data.get("already_archived") or []))
+    for handle in handles:
         path = os.path.join(directory, "tmp", "remote", f"{handle}.json")
-        if not os.path.exists(path):
+        # a snapshot read in an earlier phase predates that phase's own writes
+        if not os.path.exists(path) or (started is not None and os.path.getmtime(path) < started):
             missing.append(handle)
             continue
         try:
