@@ -10,6 +10,14 @@ for a product to create, when a concept file was extracted from another products
 block: run extract.py <dir> <concept> again), when a concept file differs from its decision in state.json
 (warnings aside: run state.py decide again), or when the status_mode / data_language decisions are missing or
 invalid.
+
+In a later phase (state phase > 1) a `Changes (phase <n>):` section summarizes diff.json and plan_shared.py
+--changes, and the dry-run also blocks while diff.json is missing, from another phase or computed from another
+products.json or other decisions, while a changed or removed product has no snapshot read in this phase
+(tmp/remote/<handle>.json) or the conflicts were not computed from the current snapshots, while payload.py fails
+for a product of diff.json, and while the removed products, the rekeyed products or the destructive shared changes
+lack their decision of the phase (removed_action, confirmed_rekey, confirmed_changes). A created handle gone from
+products.json is then a removed product (flagged by state.py sync), not a drift.
 """
 
 import glob
@@ -20,14 +28,18 @@ import sys
 from typing import List, Tuple
 
 import catalog
+import diff as diff_module
 import payload
+import plan_shared
 from metafields import suggest_type
+from state import forced, phase_decision
 
 REQUIRED_DECISIONS = ("status_mode", "data_language")
 STATUS_MODES = ("draft", "active", "source")
 MAX_CANDIDATES = 3
 MAX_PAYLOAD_ERRORS = 10
 MAX_NAMES = 20
+MAX_CHANGED = 10
 SPEC_RESERVED = ("origin", "reason", "question")
 CONCEPTS = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
 CONCEPT_BLOCKING = ("list_in_single_field", "missing_sku", "too_long")
@@ -86,15 +98,21 @@ def is_live(entry):
 
 
 def state_drift(data, state):
-    """Blocking lines when products.json and state.json disagree on the handles."""
+    """Blocking lines when products.json and state.json disagree on the handles. In a later phase a created or
+    archived handle gone from products.json is a removed product once state.py sync flagged it."""
     if not state:
         return ["  state.json missing: run state.py init"]
     entries = state.get("products") or {}
     handles = {p["handle"] for p in data["products"]}
     gone = sorted(h for h, entry in entries.items() if h not in handles and is_live(entry))
+    flagged = []
+    if state.get("phase", 1) > 1:
+        removed = [h for h in gone if entries[h].get("status") in ("created", "archived")]
+        gone = [h for h in gone if h not in removed]
+        flagged = [h for h in removed if not entries[h].get("removed")]
     unsynced = sorted([h for h in handles if h not in entries or entries[h].get("status") == "skipped"]
                       + [h for h, entry in entries.items() if h not in handles and not is_live(entry)
-                         and entry.get("status") in ("pending", "failed")])
+                         and entry.get("status") in ("pending", "failed")] + flagged)
     lines = []
     if gone:
         lines.append("  identity changed or product removed: %s (created in Flowkiwi, no longer in products.json: "
@@ -291,8 +309,163 @@ def concepts_section(files, products) -> List[str]:
     return lines
 
 
+def read_diff(directory: str):
+    path = os.path.join(directory, "diff.json")
+    return read_json(path) if os.path.exists(path) else None
+
+
+def removed_action(state: dict):
+    decision = phase_decision(state, "removed_action")
+    action = decision.get("action") if isinstance(decision, dict) else None
+    return action if action in ("archive", "delete") else None
+
+
+def snapshot_handles(diff_data: dict, state: dict) -> List[str]:
+    """The handles the update run may write: each needs a snapshot of Flowkiwi read in this phase."""
+    handles = list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or [])
+    if removed_action(state) == "delete":
+        handles += list(diff_data.get("already_archived") or [])
+    return sorted(set(handles))
+
+
+def snapshot_problems(directory: str, diff_data: dict, state: dict) -> List[str]:
+    started = diff_module.phase_started(state)
+    compared = diff_data.get("snapshots") or {}
+    missing, stale = [], []
+    for handle in snapshot_handles(diff_data, state):
+        path = os.path.join(directory, "tmp", "remote", handle + ".json")
+        if not os.path.exists(path) or (started is not None and os.path.getmtime(path) < started):
+            missing.append(handle)
+        elif compared.get(handle) != os.path.getmtime(path):
+            stale.append(handle)
+    command = "diff.py conflicts %s" % shlex.quote(directory)
+    lines = []
+    if missing:
+        lines.append("  snapshots missing: %s (read in this phase into tmp/remote/<handle>.json, then run %s)" % (
+            catalog._handles_text(missing), command))
+    if stale:
+        lines.append("  conflicts not computed from the current snapshots: %s (run %s)" % (
+            catalog._handles_text(stale), command))
+    return lines
+
+
+def diff_problems(directory: str, diff_data, state: dict, products: dict) -> List[str]:
+    """diff.json must exist, be of the current phase and come from the current products and decisions."""
+    phase = state.get("phase", 1)
+    command = "run diff.py %s" % shlex.quote(directory)
+    if diff_data is None:
+        return ["  diff.json is missing: %s" % command]
+    if diff_data.get("phase") != phase:
+        return ["  diff.json is from phase %s: %s" % (diff_data.get("phase"), command)]
+    if diff_data.get("source") != diff_module.source_fingerprint(state, products):
+        return ["  diff.json was computed from another products.json or other decisions: %s, then %s" % (
+            command, "diff.py conflicts %s" % shlex.quote(directory))]
+    return []
+
+
+def decision_problems(diff_data: dict, state: dict) -> List[str]:
+    phase = state.get("phase", 1)
+    removal = diff_data.get("removal") or {}
+    lines = []
+    waiting = [h for h in diff_data.get("removed") or [] if removal.get(h, "removed_action") == "removed_action"]
+    if waiting and removed_action(state) is None:
+        lines.append('  removed products without decision removed_action {"phase": %d, "action": "archive" or '
+                     '"delete"}: %s' % (phase, catalog._handles_text(waiting)))
+    if "delete_rekeyed" in removal.values() and phase_decision(state, "confirmed_rekey") is None:
+        lines.append('  rekeyed products not confirmed: decision confirmed_rekey {"phase": %d}' % phase)
+    return lines
+
+
+def diff_errors(diff_data: dict) -> List[str]:
+    errors = ["    %s: %s" % item for item in (diff_data.get("errors") or {}).items()]
+    if not errors:
+        return []
+    more = len(errors) - MAX_PAYLOAD_ERRORS
+    return (["  payload.py fails for %d products of diff.json:" % len(errors)] + errors[:MAX_PAYLOAD_ERRORS]
+            + (["    and %d more" % more] if more > 0 else []))
+
+
+def shared_changes(state: dict, data: dict) -> Tuple[List[str], List[str]]:
+    """(lines of the Changes section, blocking lines) of plan_shared.py --changes."""
+    try:
+        found = plan_shared.changes(state, data.get("metafield_columns"))
+    except payload.PayloadError as error:
+        return [], ["  plan_shared.py --changes fails: %s" % error]
+    waiting = plan_shared.unconfirmed(state, found)
+    destructive = found["destructive"]
+    lines = ["  shared changes: %d destructive (confirmed %d), %d updates" % (
+        len(destructive), len(destructive) - len(waiting), len(found["updates"]))]
+    lines += ["    %s: %s (products: %s)" % (c["key"], c["reason"], catalog._handles_text(c["products"]) or "none")
+              for c in destructive]
+    lines += ["    update %s: %s" % (u["key"], u["operation"]) for u in found["updates"]]
+    if found["unmanaged"]:
+        lines.append("    unmanaged (reused, never modified): %s" % ", ".join(found["unmanaged"]))
+    if found["unknown"]:
+        lines.append("    unknown (recorded without spec, not compared): %s" % ", ".join(found["unknown"]))
+    blocking = ["  destructive shared changes not confirmed: %s" % ", ".join(waiting)] if waiting else []
+    return lines, blocking
+
+
+def changes_section(diff_data, state: dict) -> List[str]:
+    lines = ["Changes (phase %d):" % state.get("phase", 1)]
+    if diff_data is None or diff_data.get("phase") != state.get("phase", 1):
+        return lines + ["  diff.json missing or from another phase"]
+    changed = diff_data.get("changed") or {}
+    lines.append("  new: %d" % len(diff_data.get("new") or []))
+    lines.append("  changed: %d" % len(changed))
+    lines += ["    %s: %s" % (handle, ", ".join(diff_module.change_paths(change)))
+              for handle, change in list(changed.items())[:MAX_CHANGED]]
+    if len(changed) > MAX_CHANGED:
+        lines.append("    and %d more" % (len(changed) - MAX_CHANGED))
+    for entry in diff_data.get("moved") or []:
+        lines.append("    moved SKU %s: %s -> %s" % (entry["sku"], entry["from"], ", ".join(entry["to"])))
+    removed = diff_data.get("removed") or []
+    lines.append("  removed: %d (action: %s)" % (len(removed), removed_action(state) or "not decided"))
+    if removed:
+        lines.append("    " + catalog._handles_text(removed))
+    archived = diff_data.get("already_archived") or []
+    if archived:
+        lines.append("  already archived: %d (written again only when the action is delete)" % len(archived))
+    rekeyed = diff_data.get("rekeyed") or []
+    lines.append("  rekeyed: %d (%s)" % (len(rekeyed), "confirmed" if phase_decision(state, "confirmed_rekey")
+                                          is not None else "not confirmed"))
+    for entry in rekeyed:
+        targets = entry.get("new", []) + entry.get("changed", [])
+        lines.append("    %s -> %s (SKU %s)" % (entry["removed"], ", ".join(targets), ", ".join(entry["skus"])))
+    for handle, reason in (diff_data.get("blocked_rekeys") or {}).items():
+        lines.append("    blocked %s: %s (archived, never deleted)" % (handle, reason))
+    conflicts = diff_data.get("conflicts") or {}
+    lines.append("  modified in Flowkiwi: %d (forced: %d)" % (
+        len(conflicts), sum(1 for handle in conflicts if forced(state, handle))))
+    lines += ["    %s%s: %s" % (handle, " (forced)" if forced(state, handle) else "", ", ".join(paths))
+              for handle, paths in conflicts.items()]
+    unmanaged = diff_data.get("unmanaged") or []
+    lines.append("  unmanaged: %d" % len(unmanaged))
+    if unmanaged:
+        lines.append("    %s (reused, never written)" % catalog._handles_text(unmanaged))
+    lines += ["    %s, reused items never written: %s" % (handle, ", ".join(paths))
+              for handle, paths in (diff_data.get("unmanaged_items") or {}).items()]
+    if diff_data.get("no_written"):
+        lines.append("  not compared (no written snapshot): %s" % catalog._handles_text(diff_data["no_written"]))
+    return lines
+
+
+def phase_checks(directory: str, state: dict, products: dict) -> Tuple[List[str], List[str]]:
+    """(the Changes section, blocking lines) of a later phase."""
+    diff_data = read_diff(directory)
+    problems = diff_problems(directory, diff_data, state, products)
+    lines = changes_section(diff_data, state)
+    if diff_data is not None and diff_data.get("phase") == state.get("phase", 1):
+        problems += diff_errors(diff_data)
+        problems += snapshot_problems(directory, diff_data, state)
+        problems += decision_problems(diff_data, state)
+    shared_lines, shared_blocking = shared_changes(state, products)
+    return lines + shared_lines, problems + shared_blocking
+
+
 def report(directory: str) -> Tuple[str, int]:
-    data = catalog.refresh(read_json(os.path.join(directory, "products.json")))
+    raw = read_json(os.path.join(directory, "products.json"))
+    data = catalog.refresh(json.loads(json.dumps(raw)))
     state_path = os.path.join(directory, "state.json")
     state = read_json(state_path) if os.path.exists(state_path) else {}
     decisions = state.get("decisions") or {}
@@ -310,12 +483,17 @@ def report(directory: str) -> Tuple[str, int]:
     problems += provenance_problems(workspace, files, data)
     problems += stale_decisions(files, decisions, workspace, state.get("decision_meta"))
     problems += concept_blocking(files)
+    changes = []  # type: List[str]
+    if state.get("phase", 1) > 1:
+        changes, phase_problems = phase_checks(workspace, state, raw)
+        problems += phase_problems
     variants = [v for p in data["products"] for v in p["variants"]]
     images = sum(len(p.get("images") or []) for p in data["products"])
 
     lines = ["Data language: %s" % (decisions.get("data_language") or "(missing)"),
              "Status: %s" % (decisions.get("status_mode") or "(missing)")]
     lines += to_create(data, state)
+    lines += changes
     lines += concepts_section(files, data["products"])
     if blocking or problems:
         lines.append("Blocking:")

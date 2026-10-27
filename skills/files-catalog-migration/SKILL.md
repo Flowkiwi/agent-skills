@@ -20,7 +20,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 ## Hard rules
 
-- **No write before confirmation.** Nothing is created in Flowkiwi before the developer approved the dry-run summary (Phase 3).
+- **No write before confirmation.** Nothing is created in Flowkiwi before the developer approved the dry-run summary (Phase 3), and nothing is updated, archived or deleted before the dry-run of the later phase was approved (`references/phases.md`).
 - **Check before create, check before retry.** Every creation is preceded by a lookup (state, then Flowkiwi). After any failed or timed-out write, look up before retrying. Never create a duplicate.
 - **Never modify tenant items you did not create**, except reusing them as-is (recorded `reused`) or adopting an orphan, a product of this migration created before its `import.key` marker was written.
 - **State after each step.** Shared elements go through `state.py shared`, products through worker result files merged with `state.py merge`. Never edit `state.json` by hand.
@@ -41,7 +41,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the Flowkiwi tools are missing at first, the MCP may still be connecting: wait a few seconds (`sleep 5`) and search the tools again once before concluding. Still missing or not connected: stop and say so.
 2. Ask the client slug. Workspace: `migrations/<client-slug>/` (layout in `references/state.md`).
-3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu, then `references/create.md` `## Concept added after creation` when the products already exist), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: not supported by this version yet, say so and offer the other choices). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
+3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu, then `references/create.md` `## Concept added after creation` when the products already exist), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: "Later phases" below). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
 
 ## Phase 1 - Intake
 
@@ -84,6 +84,10 @@ Read `references/create.md` and follow it: blocking check, dry-run summary and e
 
 End every phase with the client review: `$S/client_review.py <dir>` writes `client-review.md`, the questions, choices and missing data to send to the client (`references/review.md`).
 
+## Later phases
+
+When the client answered `client-review.md` or sent new or corrected files after products were created: read `references/phases.md` and follow its `## Procedure`. The answers are recorded with origin `client`, the structured files regenerated, and `diff.py` compares them with what the last import wrote: changed products are updated in place, removed products archived or deleted with one question for the whole phase, a grouping or key change is shown as removals plus creations and confirmed, products modified in Flowkiwi since the last import are left as they are unless the developer forces them, and destructive changes on shared elements are confirmed with the list of their products. Only what this migration created is ever written. The phase ends like the first one, with the final report and the client review.
+
 ## Running workers
 
 Two modes, same files and same procedure:
@@ -99,4 +103,4 @@ In both modes:
 
 ## Undo
 
-Read `references/undo.md`. Only items recorded `created` by this migration are removed, after the developer confirmed the scope (`pilot`, `module:<name>`, `shared:<key>` or `all`).
+Read `references/undo.md`. Only items recorded `created` by this migration are removed, after the developer confirmed the scope (`pilot`, `module:<name>`, `shared:<key>`, `product:<handle>` or `all`).

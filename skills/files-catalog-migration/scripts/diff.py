@@ -42,9 +42,14 @@ diff.json:
                     (filled by the conflicts step; never updated, archived or deleted unless forced)
   missing_snapshots handles of changed, removed or already_archived without a snapshot read in the current
                     phase (filled by the conflicts step)
+  snapshots         {"<handle>": <mtime>}: the snapshot files the conflicts step compared (dryrun.py blocks when a
+                    snapshot changed or appeared since)
+  source            sha256 of the products of products.json and of the decisions (the phase decisions aside):
+                    dryrun.py blocks when products.json or a decision changed since diff.py ran
 Deleted handles never appear.
 """
 
+import hashlib
 import json
 import os
 import sys
@@ -57,6 +62,16 @@ import verify
 
 PRODUCT_FIELDS = ("title", "description", "tags", "status", "category", "attributes", "collections")
 LIVE = ("created", "archived")
+PHASE_DECISIONS = ("force_update", "removed_action", "confirmed_changes", "confirmed_rekey")
+
+
+def source_fingerprint(state_data, products):
+    """What the difference was computed from: the products and the decisions, without the phase decisions
+    recorded after diff.py (they never change a payload)."""
+    decisions = {k: v for k, v in (state_data.get("decisions") or {}).items() if k not in PHASE_DECISIONS}
+    text = json.dumps({"products": products.get("products"), "decisions": decisions}, sort_keys=True,
+                      ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
 
 def _sorted_list(values):
@@ -239,7 +254,7 @@ def diff(state_data, products):
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
               "blocked_rekeys": {}, "moved": [], "no_written": [], "errors": {}, "conflicts": {},
-              "missing_snapshots": []}
+              "missing_snapshots": [], "snapshots": {}, "source": source_fingerprint(state_data, products)}
 
     for handle in present:
         product = entries.get(handle)
@@ -489,7 +504,7 @@ def conflicts_main(args):
         print(f"error: diff.json is from phase {diff_data.get('phase')}, run diff.py again", file=sys.stderr)
         return 1
     started = phase_started(state_data)
-    found, missing, not_compared = {}, [], []
+    found, missing, not_compared, read = {}, [], [], {}
     handles = (list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or [])
                + list(diff_data.get("already_archived") or []))
     for handle in handles:
@@ -507,6 +522,7 @@ def conflicts_main(args):
             print(f"error: {path}: expected {{\"product\": {{...}}, \"variants\": [...], \"metafields\": [...]}}",
                   file=sys.stderr)
             return 1
+        read[handle] = os.path.getmtime(path)
         written = ((state_data.get("products", {}).get(handle) or {}).get("written") or {}).get("payload")
         if not written:
             not_compared.append(handle)
@@ -514,7 +530,7 @@ def conflicts_main(args):
         changes = conflicts(written_view(written), remote_view(snapshot))
         if changes:
             found[handle] = changes
-    diff_data["conflicts"], diff_data["missing_snapshots"] = found, missing
+    diff_data["conflicts"], diff_data["missing_snapshots"], diff_data["snapshots"] = found, missing, read
     _write_json(diff_path, diff_data)
     print(conflicts_report(diff_data, state_data, not_compared))
     return 0
