@@ -87,7 +87,7 @@ A product's values are the distinct non-empty results of `value` over its rows, 
 
 3. `$S/state.py decide <dir> --key taxonomy --value-file <dir>/concepts/taxonomy.json --origin developer`.
 
-`concepts/taxonomy.json`: `{"source": "mappings/taxonomy.json", "category_status": "<iri>", "categories": [{"path": "A > B", "name": "B", "parent": "A"}], "products": {"<handle>": "A > B"}, "attributes": [{"code", "name", "type", "multiple", "categories": ["A"], "options": [{"value", "source"}], "values": {"<handle>": ["<value>"]}}], "uncategorized": ["<handle>"], "warnings": [...]}`, categories sorted by path, parents first. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/taxonomy.json`: `{"source": "mappings/taxonomy.json", "category_status": "<iri>", "categories": [{"path": "A > B", "name": "B", "parent": "A"}], "products": {"<handle>": "A > B"}, "attributes": [{"code", "name", "type", "multiple", "categories": ["A"], "options": [{"value", "source"}], "values": {"<handle>": ["<value>"]}}], "uncategorized": ["<handle>"], "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`), categories sorted by path, parents first. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

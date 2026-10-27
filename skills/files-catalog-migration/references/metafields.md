@@ -66,7 +66,7 @@ List values: the format Flowkiwi expects for a list metafield is checked with on
 
 3. `$S/state.py decide <dir> --key metafields --value-file <dir>/concepts/metafields.json --origin developer` (`--origin agent` when you chose the columns).
 
-`concepts/metafields.json`: `{"definitions": {"<namespace.key>": {"type", "name", "transform"}}, "values": {"<handle>": {"<namespace.key>": "<value>" or ["<value>", ...]}}, "warnings": [...]}`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/metafields.json`: `{"definitions": {"<namespace.key>": {"type", "name", "transform"}}, "values": {"<handle>": {"<namespace.key>": "<value>" or ["<value>", ...]}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`). `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

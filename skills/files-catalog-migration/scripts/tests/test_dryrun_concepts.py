@@ -29,10 +29,10 @@ class DryRunConceptsTest(unittest.TestCase):
         for concept in CONCEPTS:
             self.decide(concept)
 
-    def decide(self, key, value_json=None):
+    def decide(self, key, value_json=None, origin=("--origin", "developer")):
         value = ["--value-json", value_json] if value_json else [
             "--value-file", os.path.join(self.dir, "concepts", key + ".json")]
-        run("state.py", "decide", self.dir, "--key", key, *value, "--origin", "developer")
+        run("state.py", "decide", self.dir, "--key", key, *(value + list(origin)))
 
     def edit_mapping(self, concept, change):
         path = os.path.join(self.dir, "mappings", concept + ".json")
@@ -69,11 +69,41 @@ class DryRunConceptsTest(unittest.TestCase):
         run("extract.py", self.dir, "collections")
         text, code = dryrun.report(self.dir)
         self.assertEqual(code, 1)
-        self.assertIn("  stale decision: collections (run state.py decide <dir> --key collections --value-file "
-                      "concepts/collections.json --origin developer)", text)
+        self.assertIn("  stale decision: collections (run state.py decide %s --key collections --value-file "
+                      "%s --origin developer)" % (self.dir, os.path.join(self.dir, "concepts", "collections.json")),
+                      text)
         self.assertIn("  collections: 1 collections, 1 products in a collection", text)
         self.decide("collections")
         self.assertEqual(dryrun.report(self.dir)[1], 0)
+
+    def test_stale_line_keeps_the_recorded_origin_and_reason(self):
+        self.decide("taxonomy", origin=("--origin", "agent", "--reason", "Arbre proposé"))
+        self.edit_mapping("taxonomy", lambda m: m["categories"].update(drop_levels=2))
+        run("extract.py", self.dir, "taxonomy")
+        text, _ = dryrun.report(self.dir)
+        self.assertIn("  stale decision: taxonomy (run state.py decide %s --key taxonomy --value-file %s "
+                      "--origin agent --reason 'Arbre proposé')" % (
+                          self.dir, os.path.join(self.dir, "concepts", "taxonomy.json")), text)
+
+    def test_mapping_changed_since_extraction_blocks(self):
+        self.edit_mapping("metafields", lambda m: m.update(reason="Poids en kg."))
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("  concept metafields was extracted from another mappings/metafields.json: re-run extract.py "
+                      "%s metafields" % self.dir, text)
+        run("extract.py", self.dir, "metafields")
+        self.decide("metafields")
+        self.assertEqual(dryrun.report(self.dir)[1], 0)
+
+    def test_concept_file_without_provenance_blocks(self):
+        path = os.path.join(self.dir, "concepts", "taxonomy.json")
+        data = read_json(path)
+        del data["provenance"]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("  concept taxonomy was extracted from another products.json", text)
 
     def test_only_the_five_concepts_are_checked(self):
         with open(os.path.join(self.dir, "concepts", "columns-proposal.json"), "w", encoding="utf-8") as f:
@@ -93,6 +123,69 @@ class DryRunConceptsTest(unittest.TestCase):
         blocking = text[text.index("Blocking:"):text.index("Cleaning:")]
         self.assertIn("  metafields:", blocking)
         self.assertIn("list_in_single_field (", blocking)
+
+
+class ProvenanceTest(unittest.TestCase):
+    """The documented order skipped: codes.py fill after extract all, prices not extracted again."""
+
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        write_workspace(self.dir, CONCEPTS)
+        run("extract.py", self.dir, "all")
+        run("codes.py", "fill", os.path.join(self.dir, "products.json"), "--prefix", "2", "--start", "1",
+            "--sku-pattern", "{handle}-{index}")
+        run("state.py", "init", self.dir, "--client", "demo", "--mcp-url", "https://demo.invalid/api/mcp")
+        for key, value in (("data_language", '"fr"'), ("status_mode", '"draft"')):
+            run("state.py", "decide", self.dir, "--key", key, "--value-json", value, "--origin", "developer")
+        for concept in CONCEPTS:
+            self.decide(concept)
+
+    def decide(self, concept):
+        run("state.py", "decide", self.dir, "--key", concept, "--value-file",
+            os.path.join(self.dir, "concepts", concept + ".json"), "--origin", "developer")
+
+    def test_prices_from_before_codes_fill_block(self):
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        blocking = text[text.index("Blocking:"):text.index("Cleaning:")]
+        self.assertIn("  concept prices was extracted from another products.json: re-run extract.py %s prices"
+                      % self.dir, blocking)
+        for concept in ("taxonomy", "metafields", "metaobjects"):
+            self.assertNotIn("concept %s was extracted" % concept, blocking)
+        self.assertIn("  prices:\n    missing_sku (2)\n      row 5 2228: ", blocking)
+        run("extract.py", self.dir, "prices")
+        self.decide("prices")
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 0, text)
+
+    def test_removed_products_block_every_concept(self):
+        path = os.path.join(self.dir, "fixes.json")
+        fixes = read_json(path) if os.path.exists(path) else {}
+        fixes["skip"] = ["1004"]
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(fixes, f)
+        run("extract.py", self.dir, "products")
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        for concept in CONCEPTS:
+            self.assertIn("  concept %s was extracted from another products.json" % concept, text)
+
+
+class ConceptLinesTest(unittest.TestCase):
+    def test_pairs_without_price_never_negative(self):
+        data = {"countries": [{"code": "FR"}], "offers": {"a": {"A-1": {"FR": {}}}, "b": {"B-1": {"FR": {}}}}}
+        lines = dryrun.concept_lines("prices", data, [{"variants": [{"sku": "A-1"}]}])
+        self.assertEqual(lines, ["  prices: 2 offers, 0 variant-country pairs without price, countries FR"])
+
+    def test_missing_sku_and_too_long_in_a_concept_file_block(self):
+        warnings = [{"row": 3, "handle": "a", "code": code, "field": "f", "message": "m", "stage": "extract"}
+                    for code in ("missing_sku", "too_long", "missing_price")]
+        text = "\n".join(dryrun.concept_blocking([("taxonomy", {"warnings": warnings})]))
+        self.assertIn("missing_sku (1)", text)
+        self.assertIn("too_long (1)", text)
+        self.assertNotIn("missing_price", text)
 
 
 if __name__ == "__main__":

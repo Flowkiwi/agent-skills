@@ -8,6 +8,7 @@ import unittest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+import catalog  # noqa: E402
 import extract  # noqa: E402
 import mapping  # noqa: E402
 import payload  # noqa: E402
@@ -59,7 +60,11 @@ class TaxonomyCategoriesTest(ConceptTestCase):
         self.assertEqual(t["products"]["2230"], "Petit électroménager > Grille-pain")
         self.assertEqual(t["uncategorized"], [])
         self.assertEqual(list(t), ["source", "category_status", "categories", "products", "attributes",
-                                   "uncategorized", "warnings"])
+                                   "uncategorized", "warnings", "provenance"])
+        self.assertEqual(set(t["provenance"]), {"products", "mapping"})
+        self.assertRegex(t["provenance"]["products"], "^[0-9a-f]{64}$")
+        self.assertEqual(t["provenance"]["mapping"],
+                         catalog.file_sha256(os.path.join(self.dir, "mappings", "taxonomy.json")))
         self.assertEqual((t["source"], t["category_status"]), ("mappings/taxonomy.json", "/api/statuses/ACTIVE"))
         self.assertEqual(t["categories"][1], {"path": "Petit électroménager > Bouilloire", "name": "Bouilloire",
                                               "parent": "Petit électroménager"})

@@ -73,7 +73,7 @@ class MetaobjectsTest(ConceptTestCase):
         self.assertEqual(m["reference_validation"], True)
         self.assertEqual(m["entries"][0], DECISION["entries"][0])
         self.assertEqual(m["values"]["2226"], DECISION["values"]["2226"])
-        self.assertEqual(sorted(m), sorted(DECISION))
+        self.assertEqual(sorted(m), sorted(list(DECISION) + ["provenance"]))
         self.assertEqual(len(m["values"]), 6)
 
     def test_case_variant_without_map_conflicts(self):

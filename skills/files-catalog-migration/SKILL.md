@@ -66,7 +66,7 @@ Products always come first. Then offer the other concepts in menu order, one que
 
 - **Column triage**, once, before taxonomy and metafields: `$S/columns.py propose <dir>` and show its table (every column of the mapped sources with a role: `core`, `attribute`, `metafield`, `description` or `ignore`, a type and the reason), so one validation covers attributes, metafields, descriptions and ignored columns. Each concept then starts from the rows of its role.
 - **Prices last**: offers are keyed by SKU, so the prices are extracted after `codes.py fill` (a products step); extract them again whenever `products.json` changes.
-- **After a products change** (new mapping, fixes, new file): `$S/extract.py <dir> all` extracts the products, then every concept with a `mappings/<concept>.json`, in menu order. Record each changed concept again (`state.py decide`): the dry-run blocks while a `concepts/<concept>.json` differs from its decision.
+- **After a products change** (new mapping, fixes, new file): `$S/extract.py <dir> all` extracts the products, then every concept with a `mappings/<concept>.json`, in menu order. Record each changed concept again (`state.py decide`): the dry-run blocks while a `concepts/<concept>.json` differs from its decision, or was extracted from another `products.json` or mapping than the current ones.
 
 Per concept:
 

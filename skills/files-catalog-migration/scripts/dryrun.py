@@ -4,15 +4,18 @@ Usage:
   python3 dryrun.py <dir>
 
 Reads products.json, state.json (optional), mappings/*.json and concepts/*.json. Exit code 1 when blocking
-warnings remain (list_in_single_field in a concept file included), when products.json and state.json disagree
-(a created product whose handle is gone, handles not synced), when payload.py would fail for a product to create,
-when a concept file differs from its decision in state.json (warnings aside: run state.py decide again), or when
-the status_mode / data_language decisions are missing or invalid.
+warnings remain (list_in_single_field, missing_sku and too_long in a concept file included), when products.json
+and state.json disagree (a created product whose handle is gone, handles not synced), when payload.py would fail
+for a product to create, when a concept file was extracted from another products.json or mapping (its provenance
+block: run extract.py <dir> <concept> again), when a concept file differs from its decision in state.json
+(warnings aside: run state.py decide again), or when the status_mode / data_language decisions are missing or
+invalid.
 """
 
 import glob
 import json
 import os
+import shlex
 import sys
 from typing import List, Tuple
 
@@ -26,7 +29,7 @@ MAX_CANDIDATES = 3
 MAX_PAYLOAD_ERRORS = 10
 SPEC_RESERVED = ("origin", "reason", "question")
 CONCEPTS = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
-CONCEPT_BLOCKING = ("list_in_single_field",)
+CONCEPT_BLOCKING = ("list_in_single_field", "missing_sku", "too_long")
 
 
 def read_json(path):
@@ -158,10 +161,34 @@ def concept_files(directory: str) -> List[Tuple[str, dict]]:
     return found
 
 
-def stale_decisions(files, decisions) -> List[str]:
+def provenance_problems(directory: str, files, data: dict) -> List[str]:
+    """A concept file must come from the current products.json and mappings/<concept>.json."""
+    lines = []
+    for concept, content in files:
+        mapping_path = os.path.join(directory, "mappings", concept + ".json")
+        expected = catalog.concept_provenance(data, concept, mapping_path)
+        found = content.get("provenance") or {}
+        command = "re-run extract.py %s %s" % (shlex.quote(directory), concept)
+        if found.get("products") != expected["products"]:
+            lines.append("  concept %s was extracted from another products.json: %s" % (concept, command))
+        elif found.get("mapping") != expected["mapping"]:
+            lines.append("  concept %s was extracted from another mappings/%s.json: %s" % (concept, concept, command))
+    return lines
+
+
+def decide_command(directory: str, concept: str, meta: dict) -> str:
+    """The state.py decide command recording the concept file again, with the origin and reason it had."""
+    words = ["state.py", "decide", directory, "--key", concept, "--value-file",
+             os.path.join(directory, "concepts", concept + ".json"), "--origin", meta.get("origin") or "developer"]
+    if meta.get("reason"):
+        words += ["--reason", meta["reason"]]
+    return " ".join(shlex.quote(word) for word in words)
+
+
+def stale_decisions(files, decisions, directory: str = "<dir>", meta: dict = None) -> List[str]:
     """A concept file must be the recorded decision; both are compared without their warnings."""
-    return ["  stale decision: %s (run state.py decide <dir> --key %s --value-file concepts/%s.json "
-            "--origin developer)" % (concept, concept, concept)
+    meta = meta or {}
+    return ["  stale decision: %s (run %s)" % (concept, decide_command(directory, concept, meta.get(concept) or {}))
             for concept, data in files if without_warnings(decisions.get(concept)) != without_warnings(data)]
 
 
@@ -209,7 +236,7 @@ def concept_lines(concept: str, data: dict, products: List[dict]) -> List[str]:
     offers = sum(len(by_country) for by_sku in (data.get("offers") or {}).values() for by_country in by_sku.values())
     pairs = sum(len(p["variants"]) for p in products) * len(countries)
     return ["  prices: %d offers, %d variant-country pairs without price, countries %s" % (
-        offers, pairs - offers, ", ".join(c.get("code") or "?" for c in countries) or "none")]
+        offers, max(0, pairs - offers), ", ".join(c.get("code") or "?" for c in countries) or "none")]
 
 
 def concepts_section(files, products) -> List[str]:
@@ -238,7 +265,10 @@ def report(directory: str) -> Tuple[str, int]:
     elif mode:
         problems += payload_errors(split_products(data, state)[0], state)
     files = concept_files(directory)
-    problems += stale_decisions(files, decisions) + concept_blocking(files)
+    workspace = os.path.abspath(directory)
+    problems += provenance_problems(workspace, files, data)
+    problems += stale_decisions(files, decisions, workspace, state.get("decision_meta"))
+    problems += concept_blocking(files)
     variants = [v for p in data["products"] for v in p["variants"]]
     images = sum(len(p.get("images") or []) for p in data["products"])
 

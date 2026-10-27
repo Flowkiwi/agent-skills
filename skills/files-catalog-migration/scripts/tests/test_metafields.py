@@ -157,7 +157,7 @@ class MetafieldsTest(ConceptTestCase):
 
     def test_decision_format(self):
         m, _ = self.extract_with(self.MAPPING)
-        self.assertEqual(list(m), ["definitions", "values", "warnings"])
+        self.assertEqual(list(m), ["definitions", "values", "warnings", "provenance"])
 
     def test_cli_prints_the_preview(self):
         self.write_mapping(self.MAPPING)

@@ -60,7 +60,7 @@ The mapping has no `sources`: its columns are those of `mappings/products.json`.
 
 3. `$S/state.py decide <dir> --key metaobjects --value-file <dir>/concepts/metaobjects.json --origin agent` (`--origin developer` when the developer asked for it).
 
-`concepts/metaobjects.json`: `{"reference_validation": true, "definitions": [{"type", "name", "displayNameField", "status", "fields": [{"key", "name", "type", "required", "target"}], "reference": {"metafield", "name"}}], "entries": [{"definition", "handle", "fields": {"<key>": "<value>"}}], "values": {"<handle>": {"<type>": "<entry handle>"}}, "warnings": [...]}`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/metaobjects.json`: `{"reference_validation": true, "definitions": [{"type", "name", "displayNameField", "status", "fields": [{"key", "name", "type", "required", "target"}], "reference": {"metafield", "name"}}], "entries": [{"definition", "handle", "fields": {"<key>": "<value>"}}], "values": {"<handle>": {"<type>": "<entry handle>"}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`). `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

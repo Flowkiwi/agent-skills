@@ -527,7 +527,8 @@ def load_concept_mapping(directory: str, concept: str) -> Tuple[dict, dict]:
 
 def main_concept(directory: str, concept: str) -> dict:
     """Extracts a concept from the rows of the products, writes concepts/<concept>.json and returns it.
-    Only the warnings of the concept are kept: the row loading ones are already in products.json."""
+    Only the warnings of the concept are kept: the row loading ones are already in products.json. The
+    provenance block lets dryrun.py check the file against the current products.json and mapping."""
     if concept not in CONCEPT_MODULES:
         raise MappingError("unknown concept '%s' (available: %s)" % (concept, ", ".join(CONCEPT_MODULES)))
     m, specs = load_concept_mapping(directory, concept)
@@ -538,6 +539,8 @@ def main_concept(directory: str, concept: str) -> dict:
         except MappingError as error:
             raise MappingError("%s.json: %s" % (concept, error))
     result = CONCEPT_MODULES[concept].build(data["products"], rows, m, sources, [])
+    result["provenance"] = catalog.concept_provenance(data, concept, os.path.join(directory, "mappings",
+                                                                                   concept + ".json"))
     os.makedirs(os.path.join(directory, "concepts"), exist_ok=True)
     codes.write_json(os.path.join(directory, "concepts", concept + ".json"), result)
     return result

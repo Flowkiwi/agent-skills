@@ -43,7 +43,7 @@ A product is in every collection its rows give (the value may be a list: `pick: 
 
 3. `$S/state.py decide <dir> --key collections --value-file <dir>/concepts/collections.json --origin developer` (`--origin agent` for a proposal).
 
-`concepts/collections.json`: `{"status": "<iri>", "collections": [{"path": "A > B", "name": "B", "parent": "A"}], "membership": {"<handle>": ["A > B", "C"]}, "warnings": [...]}`, collections sorted by path, parents first, products without collection left out of `membership`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/collections.json`: `{"status": "<iri>", "collections": [{"path": "A > B", "name": "B", "parent": "A"}], "membership": {"<handle>": ["A > B", "C"]}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`), collections sorted by path, parents first, products without collection left out of `membership`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

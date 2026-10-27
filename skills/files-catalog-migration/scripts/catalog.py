@@ -6,6 +6,7 @@ Usage:
 """
 
 import argparse
+import hashlib
 import json
 import os
 import sys
@@ -21,6 +22,7 @@ BLOCKING = (
 )
 WARNING_ORDER = ("non_sellable",)
 MAX_LISTED_HANDLES = 10
+VARIANT_CONCEPTS = ("prices",)
 
 
 def _is_zero_or_empty(price):
@@ -154,6 +156,38 @@ def blocking(data, decisions=None):
     return found
 
 
+def products_fingerprint(data, concept):
+    """sha256 of what the extraction of a concept reads from products.json: the source files, the handles and
+    rows of the products and, for prices, the SKUs and prices of the variants."""
+    products = []
+    for product in sorted(data["products"], key=lambda p: p["handle"]):
+        entry = [product["handle"], product.get("rows") or {}]
+        if concept in VARIANT_CONCEPTS:
+            entry.append([[v.get("sku"), v.get("price"), v.get("compare_at_price")] for v in product["variants"]])
+        products.append(entry)
+    files = {source_id: (source or {}).get("sha256") for source_id, source in (data.get("sources") or {}).items()}
+    text = json.dumps({"sources": files, "products": products}, sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def file_sha256(path):
+    if not os.path.isfile(path):
+        return None
+    with open(path, "rb") as f:
+        return hashlib.sha256(f.read()).hexdigest()
+
+
+def concept_provenance(data, concept, mapping_path):
+    """The provenance block of concepts/<concept>.json: the products fingerprint and the mapping sha256."""
+    return {"products": products_fingerprint(data, concept), "mapping": file_sha256(mapping_path)}
+
+
+def _where(warning):
+    parts = (["row %s" % warning["row"]] if warning.get("row") is not None else []) + (
+        [str(warning["handle"])] if warning.get("handle") else [])
+    return " ".join(parts)
+
+
 def format_warnings(warnings):
     by_code = {}
     for warning in warnings:
@@ -164,7 +198,8 @@ def format_warnings(warnings):
         items = by_code[code]
         lines.append(f"{code} ({len(items)})")
         for w in items:
-            lines.append(f"  row {w['row']} {w['handle']}: {w['message']}")
+            where = _where(w)
+            lines.append(f"  {where}: {w['message']}" if where else f"  {w['message']}")
         if code == "non_sellable":
             lines.append("  hint: these products also produce missing_sku (and often missing_barcode) warnings; "
                          "skipping them with a skip_rules fix clears those too")

@@ -111,6 +111,24 @@ class CatalogTest(unittest.TestCase):
         self.assertIn("missing_sku (2)", lines)
         self.assertIn("  row 3 a: m1", lines)
 
+    def test_format_warnings_without_row_or_handle(self):
+        warnings = [{"row": None, "handle": None, "code": "path_case", "message": "m1"},
+                    {"row": None, "handle": "a", "code": "path_case", "message": "m2"}]
+        self.assertEqual(catalog.format_warnings(warnings).splitlines(), ["path_case (2)", "  m1", "  a: m2"])
+
+    def test_products_fingerprint(self):
+        data = {"products": [product("a"), product("b")], "sources": {"main": {"file": "x.xlsx", "sha256": "1"}}}
+        base = {c: catalog.products_fingerprint(data, c) for c in ("taxonomy", "prices")}
+        data["products"][0]["variants"][0]["sku"] = "A-1"
+        self.assertEqual(catalog.products_fingerprint(data, "taxonomy"), base["taxonomy"])
+        self.assertNotEqual(catalog.products_fingerprint(data, "prices"), base["prices"])
+        data["products"].reverse()
+        self.assertEqual(catalog.products_fingerprint(data, "taxonomy"), base["taxonomy"])
+        for change in (lambda d: d["products"].pop(), lambda d: d["sources"]["main"].update(sha256="2")):
+            changed = json.loads(json.dumps(data))
+            change(changed)
+            self.assertNotEqual(catalog.products_fingerprint(changed, "taxonomy"), base["taxonomy"])
+
 
 class CatalogCliTest(unittest.TestCase):
     def setUp(self):

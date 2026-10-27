@@ -67,7 +67,7 @@ class PricesTest(ConceptTestCase):
 
     def test_decision_format(self):
         p = self.extract_with(FR_MAPPING)
-        self.assertEqual(list(p), ["countries", "channels", "status", "offers", "warnings"])
+        self.assertEqual(list(p), ["countries", "channels", "status", "offers", "warnings", "provenance"])
         self.assertEqual(p["countries"], [FR_COUNTRY])
         self.assertEqual((p["channels"], p["status"]), (None, "/api/statuses/ACTIVE"))
         self.assertEqual(list(p["offers"]), ["2226", "2227", "2228", "1004", "2230"])

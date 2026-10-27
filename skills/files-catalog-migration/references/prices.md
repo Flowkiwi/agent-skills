@@ -68,7 +68,7 @@ Offers are keyed by SKU: fill the missing codes first (`$S/codes.py fill`, `refe
 
 4. `$S/state.py decide <dir> --key prices --value-file <dir>/concepts/prices.json --origin developer`.
 
-`concepts/prices.json`: `{"countries": [{"country", "code", "currency", "tax", "rate", "tax_name", "tax_included"}], "channels": null, "status": "<iri>", "offers": {"<handle>": {"<sku>": {"<code>": {"taxExcludedPrice": "16.58", "discountTaxExcludedPrice": null}}}}, "warnings": [...]}`: the mapping without its field specs (`rate` as text without trailing zeros), products and variants without any offer left out of `offers`. The `missing_price` and `not_a_number` warnings also carry `sku` and `country`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/prices.json`: `{"countries": [{"country", "code", "currency", "tax", "rate", "tax_name", "tax_included"}], "channels": null, "status": "<iri>", "offers": {"<handle>": {"<sku>": {"<code>": {"taxExcludedPrice": "16.58", "discountTaxExcludedPrice": null}}}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`): the mapping without its field specs (`rate` as text without trailing zeros), products and variants without any offer left out of `offers`. The `missing_price` and `not_a_number` warnings also carry `sku` and `country`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

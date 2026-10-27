@@ -38,7 +38,7 @@ class CollectionsTest(ConceptTestCase):
 
     def test_decision_format(self):
         c = self.extract_with(self.MAPPING)
-        self.assertEqual(list(c), ["status", "collections", "membership", "warnings"])
+        self.assertEqual(list(c), ["status", "collections", "membership", "warnings", "provenance"])
         self.assertEqual(c["status"], "/api/statuses/ACTIVE")
         self.assertEqual(c["collections"][0], {"path": "Brioche & Co", "name": "Brioche & Co", "parent": None})
         self.assertEqual(list(c["membership"]), [p["handle"] for p in self.products()["products"]])

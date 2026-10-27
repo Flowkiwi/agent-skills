@@ -22,6 +22,20 @@ migrations/<client-slug>/
 
 What is kept are the mappings and the decisions, never files changed by hand: `products.json` and `concepts/*.json` can be rebuilt at any time with `extract.py` (`all` for every mapped concept). All script commands below take the workspace folder as `<dir>`.
 
+## Concept files
+
+Every `concepts/<concept>.json` ends with a `provenance` block written by `extract.py`:
+
+```json
+{"...": "the concept keys (see its reference)", "warnings": [],
+ "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}
+```
+
+- `products`: sha256 of what the extraction read from `products.json`: the sha256 of each source file, then each product's handle and rows (sorted by handle) and, for `prices` only, the SKU, price and compare-at price of each variant. A new client file, added or removed products, a new grouping or (for prices) new SKUs change it.
+- `mapping`: sha256 of `mappings/<concept>.json` at extraction.
+
+`dryrun.py` recomputes both and blocks with `concept <concept> was extracted from another products.json` (or `from another mappings/<concept>.json`) and the `extract.py <dir> <concept>` to run again. So `codes.py fill` only blocks `prices` (extract it again after the fill), and a new client file blocks every concept. The block is part of the decision recorded by `state.py decide --value-file`, so a concept extracted again must be recorded again.
+
 ## inventory.json
 
 ```json
@@ -117,7 +131,7 @@ After a change that skips products, run `state.py sync <dir>`.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Item `ref`: names the item in the product, so a later phase can match it: the SKU of a `variant`, the title of a `product_option`, `<option title>:<value>` of an `option_value`, `namespace.key` of a `metafield`, `<sku>:<country code>` of a `sale_offer`.
 - Item `shared`: the shared key the item depends on (`metafield_definition:import.key` for the marker). Used by the undo scope `shared:<key>`. An item with a recorded `shared` key takes the module of that shared element (`state.py merge` sets it, whatever the result line said): `metaobjects` for a reference metafield (`metafield_definition:<namespace>.<key>` recorded with module `metaobjects`), so `worklists --module metaobjects` finds the products created before the metaobjects.
-- `decisions.<concept>` (`taxonomy`, `collections`, `metafields`, `metaobjects`, `prices`): the `concepts/<concept>.json` file as recorded by `state.py decide --value-file`. `dryrun.py` blocks while a concept file differs from its decision (warnings aside).
+- `decisions.<concept>` (`taxonomy`, `collections`, `metafields`, `metaobjects`, `prices`): the `concepts/<concept>.json` file as recorded by `state.py decide --value-file`. `dryrun.py` blocks while a concept file differs from its decision (warnings aside) and prints the `state.py decide` to run again, with the workspace path and the origin and reason recorded before.
 - Shared keys are `<kind>:<name>`, with their module: `metafield_definition:import.key` (`core`), `category:<path>`, `attribute_definition:<code>`, `attribute_option:<code>:<value>` (`taxonomy`), `collection:<path>` (`collections`), `metaobject_definition:<type>`, `metaobject:<type>:<entry handle>` and the reference metafield definitions `metafield_definition:<namespace>.<key>` (`metaobjects`), the other `metafield_definition:<namespace>.<key>` (`metafields`), `tax:<country code>:<rate>` and `country:<code>` (`prices`). Paths join their levels with ` > `. Item and shared kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `metaobject`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `metaobject_definition`, `channel`, `country`; within a kind, the last created goes first.
 
 ## Worker result line
@@ -160,7 +174,7 @@ $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 $S/state.py reset-deleted <dir>                                      # deleted products back to pending
 $S/state.py summary <dir>
-$S/dryrun.py <dir>                                                   # exit 1 on blocking warnings, state drift, payload errors, stale concept decisions or missing decisions
+$S/dryrun.py <dir>                                                   # exit 1 on blocking warnings, state drift, payload errors, concept files from another products.json or mapping, stale concept decisions or missing decisions
 $S/plan_shared.py <dir> [--ready]
 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|prices|all] [--dry-run]
 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
