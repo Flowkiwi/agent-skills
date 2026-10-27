@@ -82,6 +82,8 @@ Per concept:
 
 Read `references/create.md` and follow it: blocking check, dry-run summary and explicit approval, shared elements, pilot, full run, final report.
 
+End every phase with the client review: `$S/client_review.py <dir>` writes `client-review.md`, the questions, choices and missing data to send to the client (`references/review.md`).
+
 ## Running workers
 
 Two modes, same files and same procedure:
