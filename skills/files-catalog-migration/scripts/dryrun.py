@@ -68,14 +68,15 @@ def agent_choices(directory: str, state: dict) -> List[dict]:
 
 
 def split_products(data, state):
-    """(products to create, number already created) by the state status of their handle."""
+    """(products to create, number already created) by the state status of their handle. Skipped, deleted and
+    archived handles are never assigned to a creation worker."""
     statuses = {handle: entry.get("status") for handle, entry in ((state or {}).get("products") or {}).items()}
     pending, created = [], 0
     for product in data["products"]:
         status = statuses.get(product["handle"], "pending")
         if status == "created":
             created += 1
-        elif status != "skipped":
+        elif status not in ("skipped", "deleted", "archived"):
             pending.append(product)
     return pending, created
 

@@ -10,7 +10,8 @@ Usage:
   python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--handles a,b] [--retry-failed] [--module <name>]
   python3 state.py result <results/worker-N.jsonl> --json '<line>' | --json - | --json-file <file>
   python3 state.py merge <dir>
-  python3 state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
+  python3 state.py phase <dir> [--start]
+  python3 state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>|product:<handle>
   python3 state.py deleted <dir> --iris-file <file.json>
   python3 state.py reset-deleted <dir>
   python3 state.py summary <dir>
@@ -32,7 +33,7 @@ KIND_ORDER = [
 ]
 ORIGINS = ("developer", "agent", "client")
 RESULT_KEYS = {"handle", "status", "iri", "items", "error"}
-RESULT_STATUSES = {"created", "failed"}
+RESULT_STATUSES = {"created", "failed", "updated", "archived"}
 ITEM_STATUSES = {"created", "reused"}
 VERIFY_STATUSES = {"ok", "fixed", "mismatch"}
 IRI_PATTERN = re.compile(
@@ -44,14 +45,20 @@ def _new_product():
     return {"status": "pending", "iri": None, "pilot": False, "error": None, "items": []}
 
 
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def init(client, mcp_url, products):
+    started_at = _now()
     return {
         "version": 1,
         "source": "files",
         "phase": 1,
+        "phases": [{"n": 1, "started_at": started_at}],
         "client": client,
         "mcp_url": mcp_url,
-        "started_at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "started_at": started_at,
         "decisions": {},
         "decision_meta": {},
         "shared": {},
@@ -65,18 +72,55 @@ def _has_created_items(product):
 
 def sync_products(state, products):
     """New handles become pending, skipped ones that reappear too; handles gone from products.json are
-    skipped when pending, or failed without any created item (a live product must be undone instead)."""
+    skipped when pending, or failed without any created item (a live product must be undone instead).
+    A created or archived handle gone from products.json is flagged `removed` (cleared when it comes back);
+    a deleted one never is."""
     handles = {p["handle"] for p in products["products"]}
     for handle in handles:
         product = state["products"].setdefault(handle, _new_product())
+        product.pop("removed", None)
         if product["status"] == "skipped":
             product["status"] = "pending"
     for handle, product in state["products"].items():
         if handle in handles:
             continue
-        if product["status"] == "pending" or (product["status"] == "failed" and not _has_created_items(product)):
+        if product["status"] in ("created", "archived"):
+            product["removed"] = True
+        elif product["status"] == "pending" or (product["status"] == "failed" and not _has_created_items(product)):
             product["status"] = "skipped"
     return state
+
+
+def start_phase(state):
+    """Start the next phase: decisions recorded from now on belong to it."""
+    phases = state.setdefault("phases", [{"n": state.get("phase", 1), "started_at": state.get("started_at")}])
+    state["phase"] = state.get("phase", 1) + 1
+    phases.append({"n": state["phase"], "started_at": _now()})
+    return state["phase"]
+
+
+def phase_decision(state, key):
+    """The decision value when it was taken for the current phase, else None: the `phase` of its
+    decision_meta and, for a value carrying one, its own `phase` must equal the state phase."""
+    if key not in state.get("decisions", {}):
+        return None
+    value = state["decisions"][key]
+    current = state.get("phase", 1)
+    meta = state.get("decision_meta", {}).get(key)
+    if meta is not None and meta.get("phase", 1) != current:
+        return None
+    if isinstance(value, dict) and "phase" in value and value["phase"] != current:
+        return None
+    return value
+
+
+def forced(state, handle):
+    """True when decision force_update of the current phase names the handle (or is "all")."""
+    value = phase_decision(state, "force_update")
+    if not isinstance(value, dict):
+        return False
+    handles = value.get("handles")
+    return handles == "all" or (isinstance(handles, list) and handle in handles)
 
 
 def record_shared(state, key, iri, status, module, spec=None):
@@ -113,7 +157,7 @@ def decide(state, key, value, origin, reason=None):
         "origin": origin,
         "reason": reason,
         "phase": state.get("phase", 1),
-        "at": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "at": _now(),
     }
     return state
 
@@ -232,8 +276,8 @@ def validate_result(line):
         raise ValueError("handle must be a non-empty string")
     if line["status"] not in RESULT_STATUSES:
         raise ValueError(f"Result status must be one of {sorted(RESULT_STATUSES)}")
-    if line["status"] == "created" and not line["iri"]:
-        raise ValueError("iri is required when status is created")
+    if line["status"] != "failed" and not line["iri"]:
+        raise ValueError(f"iri is required when status is {line['status']}")
     if line["iri"] is not None:
         _check_iri(line["iri"])
     if line.get("verify") is not None and line["verify"] not in VERIFY_STATUSES:
@@ -250,6 +294,11 @@ def validate_result(line):
             raise ValueError("Item shared must be a shared key like metafield_definition:custom.material")
         if item.get("ref") is not None and (not isinstance(item["ref"], str) or not item["ref"]):
             raise ValueError("Item ref must be a non-empty string (SKU, option title, <option>:<value> or namespace.key)")
+    if line.get("deleted") is not None:
+        if not isinstance(line["deleted"], list):
+            raise ValueError("deleted must be a list of the IRIs deleted by the run")
+        for iri in line["deleted"]:
+            _check_iri(iri, link=isinstance(iri, str) and "#" in iri)
 
 
 def append_result(path, line):
@@ -259,10 +308,34 @@ def append_result(path, line):
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
-def merge(state, lines):
+def _snapshot(state, products, handle, line):
+    """Record what was written for the product: its payload as payload.py prints it now. An archive run only
+    wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json)."""
+    import payload  # function-level: payload imports state
+
+    product = state["products"][handle]
+    if line["status"] == "archived":
+        written = json.loads(json.dumps(product.get("written") or {}))
+        body = (written.get("payload") or {}).get("product", {}).get("body")
+        if body is not None:
+            body["status"] = "/api/statuses/ARCHIVED"
+            product["written"] = {"phase": state.get("phase", 1), "payload": written["payload"]}
+        return
+    try:
+        built = payload.build(products, state, handle)
+    except (payload.PayloadError, KeyError, TypeError, ValueError) as error:
+        print(f"warning: no written snapshot for {handle}: {error}", file=sys.stderr)
+        return
+    product["written"] = {"phase": state.get("phase", 1), "payload": built}
+
+
+def merge(state, lines, products=None):
     """Apply worker result lines. A line with a "module" key comes from a module-only run:
     it adds items and records a per-module error, without touching the product status.
-    An item tied to a recorded shared element takes that element's module (a reference metafield: metaobjects)."""
+    An item tied to a recorded shared element takes that element's module (a reference metafield: metaobjects).
+    `updated` keeps the product created (updated_phase), `archived` archives it, a failed line on a product
+    already created or archived (an update run) only records the error. `deleted` IRIs mark those items deleted.
+    With `products` (products.json), every non-failed line records the `written` snapshot of the product."""
     for line in lines:
         for item in line["items"]:
             shared = state.get("shared", {}).get(item.get("shared") or "")
@@ -276,7 +349,12 @@ def merge(state, lines):
             else:
                 errors.pop(line["module"], None)
         else:
-            product["status"] = line["status"]
+            live = product["status"] in ("created", "archived")
+            if line["status"] == "updated":
+                product["status"] = "created"
+                product["updated_phase"] = state.get("phase", 1)
+            elif not (line["status"] == "failed" and live):
+                product["status"] = line["status"]
             product["iri"] = line["iri"] or product["iri"]
             product["error"] = line["error"]
         if line.get("verify"):
@@ -289,6 +367,9 @@ def merge(state, lines):
                 known[item["iri"]] = item
             elif existing["status"] == "deleted":
                 existing.update(item)
+        _mark_items_deleted(product, set(line.get("deleted") or []))
+        if products is not None and line["status"] != "failed" and product["status"] != "deleted":
+            _snapshot(state, products, line["handle"], line)
     return state
 
 
@@ -306,21 +387,26 @@ def check_scope(scope):
     if kind == "shared" and name == MARKER_KEY:
         raise ValueError(f"Undo scope '{scope}' would delete the marker definition and every import.key marker: "
                          "no product could be found again by marker. To remove everything, use all or module:core")
-    if scope in ("all", "pilot") or (kind in ("module", "shared") and name):
+    if scope in ("all", "pilot") or (kind in ("module", "shared", "product") and name):
         return scope
-    raise ValueError(f"Unknown undo scope '{scope}': use all, pilot, module:<name> or shared:<key>")
+    raise ValueError(f"Unknown undo scope '{scope}': use all, pilot, module:<name>, shared:<key> or product:<handle>")
 
 
 def undo_plan(state, scope):
     check_scope(scope)
+    kind, _, name = scope.partition(":")
+    if kind == "product" and name not in state["products"]:
+        raise ValueError(f"unknown handle '{name}'")
     steps = []
     for handle, product in state["products"].items():
         if scope == "pilot" and not product["pilot"]:
             continue
+        if kind == "product" and handle != name:
+            continue
         for item in product["items"]:
             steps.append({"kind": item["kind"], "iri": item["iri"], "owner": handle, "status": item["status"],
                           "module": item["module"], "shared": item.get("shared")})
-    if scope != "pilot":
+    if scope != "pilot" and kind != "product":
         for key, shared in state["shared"].items():
             steps.append({"kind": key.split(":", 1)[0], "iri": shared["iri"], "owner": key,
                           "status": shared["status"], "module": shared["module"], "shared": key})
@@ -336,14 +422,20 @@ def undo_plan(state, scope):
     return [{"kind": s["kind"], "iri": s["iri"], "owner": s["owner"]} for s in steps]
 
 
+def _mark_items_deleted(product, iris):
+    """A deleted product item deletes the product, which is never flagged removed again."""
+    for item in product["items"]:
+        if item["iri"] in iris:
+            item["status"] = "deleted"
+            if item["kind"] == "product":
+                product["status"] = "deleted"
+                product.pop("removed", None)
+
+
 def mark_deleted(state, iris):
     iris = set(iris)
     for product in state["products"].values():
-        for item in product["items"]:
-            if item["iri"] in iris:
-                item["status"] = "deleted"
-                if item["kind"] == "product":
-                    product["status"] = "deleted"
+        _mark_items_deleted(product, iris)
     for shared in state["shared"].values():
         if shared["iri"] in iris:
             shared["status"] = "deleted"
@@ -353,6 +445,8 @@ def mark_deleted(state, iris):
 def reset_deleted(state):
     for product in state["products"].values():
         if product["status"] == "deleted":
+            for key in ("written", "updated_phase", "removed"):
+                product.pop(key, None)
             product.update(_new_product())
     return state
 
@@ -378,8 +472,9 @@ def summary(state):
     for meta in state.get("decision_meta", {}).values():
         if meta.get("origin") in decisions:
             decisions[meta["origin"]] += 1
-    return {"products": products, "items": items, "failed": failed, "verify": verify, "verify_mismatch": mismatch,
-            "decisions": decisions}
+    removed = sum(1 for p in state["products"].values() if p.get("removed"))
+    return {"phase": state.get("phase", 1), "products": products, "items": items, "failed": failed,
+            "verify": verify, "verify_mismatch": mismatch, "decisions": decisions, "removed": removed}
 
 
 def _read_json(path):
@@ -468,6 +563,11 @@ def _read_results(directory):
     return entries, malformed
 
 
+def _has_lines(path):
+    with open(path, encoding="utf-8") as f:
+        return any(raw.strip() for raw in f)
+
+
 def _read_worklists(directory):
     worklists = {}
     for path in glob.glob(os.path.join(directory, "worklists", "worker-*.json")):
@@ -479,7 +579,8 @@ def _merge_results(directory, state):
     """Merge result files, using the worklists present now (before any are replaced)."""
     entries, malformed = _read_results(directory)
     lines, rejected, notes = check_results(entries, _read_worklists(directory), set(state["products"]))
-    merge(state, lines)
+    products_path = os.path.join(directory, "products.json")
+    merge(state, lines, _read_json(products_path) if os.path.exists(products_path) else None)
     rejected = malformed + rejected
     for note in notes:
         print(f"note: {note}")
@@ -549,6 +650,10 @@ def main(argv):
     source.add_argument("--json-file")
 
     sub.add_parser("merge").add_argument("dir")
+
+    p = sub.add_parser("phase")
+    p.add_argument("dir")
+    p.add_argument("--start", action="store_true", help="start the next phase")
 
     p = sub.add_parser("undo-plan")
     p.add_argument("dir")
@@ -638,6 +743,16 @@ def main(argv):
         _write_json(state_path, state)
         _archive_results(args.dir)
         return 0
+    elif args.command == "phase":
+        if not args.start:
+            print(state.get("phase", 1))
+            return 0
+        unmerged = [path for path in _result_files(args.dir) if _has_lines(path)]
+        if unmerged:
+            names = ", ".join("results/" + os.path.basename(path) for path in unmerged)
+            print(f"error: {names} not merged: run state.py merge first", file=sys.stderr)
+            return 1
+        print(start_phase(state))
     elif args.command == "undo-plan":
         try:
             print(json.dumps(undo_plan(state, args.scope), indent=2))
