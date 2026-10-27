@@ -35,6 +35,10 @@ class DryRunTest(unittest.TestCase):
         self.write_state(state_module.init("demo", "https://mcp.example.com", data))
         self.decide("data_language", "fr", "client")
 
+    def products(self):
+        with open(self.products_path, encoding="utf-8") as f:
+            return json.load(f)
+
     def state(self):
         with open(self.state_path, encoding="utf-8") as f:
             return json.load(f)
@@ -120,6 +124,17 @@ class DryRunTest(unittest.TestCase):
         state_module.sync_products(state, {"products": [{"handle": h} for h in
                                                          ("2226", "2227", "2228", "1004", "nokey-0001", "2230")]})
         self.write_state(state)
+        self.assertEqual(dryrun.report(self.dir)[1], 0)
+
+    def test_sync_clears_a_removed_failed_handle(self):
+        self.fill_codes_and_decide_status()
+        state = self.state()
+        state["products"]["old"] = dict(state["products"]["2228"], status="failed", error="boom")
+        self.write_state(state)
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("run state.py sync: old", text)
+        self.write_state(state_module.sync_products(state, self.products()))
         self.assertEqual(dryrun.report(self.dir)[1], 0)
 
     def test_payload_errors_are_blocking(self):

@@ -188,6 +188,28 @@ class StateFunctionsTest(unittest.TestCase):
         state.sync_products(self.state, products("a", "b", "c", "d", "e"))
         self.assertEqual(self.state["products"]["e"]["status"], "pending")
 
+    def test_sync_skips_removed_failed_handles_without_created_items(self):
+        self.state["products"]["d"]["status"] = "failed"
+        self.state["products"]["e"].update(status="failed", items=[item("product", iri("products", "e"))])
+        state.sync_products(self.state, products("a", "b", "c"))
+        self.assertEqual(self.state["products"]["d"]["status"], "skipped")
+        self.assertEqual(self.state["products"]["e"]["status"], "failed")
+        state.sync_products(self.state, products("a", "b", "c", "d"))
+        self.assertEqual(self.state["products"]["d"]["status"], "pending")
+
+    def test_merge_takes_the_module_of_the_shared_element(self):
+        state.record_shared(self.state, "metafield_definition:custom.marque", iri("metafield_definitions", "m"),
+                            "created", "metaobjects")
+        reference = dict(item("metafield", iri("metafields", "r")), shared="metafield_definition:custom.marque",
+                         ref="custom.marque")
+        unknown = dict(item("metafield", iri("metafields", "u")), shared="metafield_definition:custom.other")
+        state.merge(self.state, [{"handle": "a", "status": "created", "iri": iri("products", "a"),
+                                  "items": [item("product", iri("products", "a")), reference, unknown],
+                                  "error": None}])
+        self.assertEqual([i["module"] for i in self.state["products"]["a"]["items"]],
+                         ["core", "metaobjects", "core"])
+        self.assertEqual(state.worklists(self.state, 1, None, False, module="metaobjects"), [])
+
     def test_worklists_same_title_same_worker(self):
         titles = {"a": "Mug", "b": "Cap", "c": "mug ", "d": "Hat", "e": "Bag"}
         lists = state.worklists(self.state, 4, None, False, titles=titles)

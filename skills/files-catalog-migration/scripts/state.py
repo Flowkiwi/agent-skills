@@ -59,14 +59,22 @@ def init(client, mcp_url, products):
     }
 
 
+def _has_created_items(product):
+    return any(i.get("status") == "created" for i in product["items"])
+
+
 def sync_products(state, products):
+    """New handles become pending, skipped ones that reappear too; handles gone from products.json are
+    skipped when pending, or failed without any created item (a live product must be undone instead)."""
     handles = {p["handle"] for p in products["products"]}
     for handle in handles:
         product = state["products"].setdefault(handle, _new_product())
         if product["status"] == "skipped":
             product["status"] = "pending"
     for handle, product in state["products"].items():
-        if handle not in handles and product["status"] == "pending":
+        if handle in handles:
+            continue
+        if product["status"] == "pending" or (product["status"] == "failed" and not _has_created_items(product)):
             product["status"] = "skipped"
     return state
 
@@ -253,8 +261,13 @@ def append_result(path, line):
 
 def merge(state, lines):
     """Apply worker result lines. A line with a "module" key comes from a module-only run:
-    it adds items and records a per-module error, without touching the product status."""
+    it adds items and records a per-module error, without touching the product status.
+    An item tied to a recorded shared element takes that element's module (a reference metafield: metaobjects)."""
     for line in lines:
+        for item in line["items"]:
+            shared = state.get("shared", {}).get(item.get("shared") or "")
+            if shared and shared.get("module"):
+                item["module"] = shared["module"]
         product = state["products"].setdefault(line["handle"], _new_product())
         if line.get("module"):
             errors = product.setdefault("module_errors", {})
