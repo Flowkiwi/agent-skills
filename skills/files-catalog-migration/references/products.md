@@ -22,7 +22,7 @@ The mandatory concept: products, options, variants, SKUs and barcodes, from `map
 
 `payload.py` applies this table: workers copy its output instead of mapping by hand. The table stays for the dry-run and for review.
 
-Kept in `products.json` but not created by this concept: images (no media through the MCP), `price` and `compare_at_price` (no prices concept in this version), `vendor` and `product_category` (for later concepts). Say it once in the dry-run.
+Kept in `products.json` but not created by this concept: images (no media through the MCP), `price` and `compare_at_price` (sent as sale offers by the prices concept, `references/prices.md`, when it is taken), `vendor` and `product_category` (read by the taxonomy, collections and metaobjects proposals, never sent as such). Say it once in the dry-run.
 
 ## Identity
 

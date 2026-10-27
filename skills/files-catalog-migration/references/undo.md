@@ -26,7 +26,7 @@ Removes what this migration created. Never touches items recorded `reused` or te
 | `channel`               | `delete_channel`                                                                                                                                 |
 | `country`               | `delete_country`                                                                                                                                 |
 
-This version only creates products, options, option values, variants, the `import.key` marker metafields and the marker definition; the other kinds come with later concepts. Check each operation with `describe_operation` before the first call (path argument names).
+Purchase offers, suppliers and channels are not created by this version; every other kind comes from the core (products, options, option values, variants and the `import.key` markers, `references/products.md`) or from a concept, with its `## Undo notes` (`references/taxonomy.md`, `references/collections.md`, `references/metafields.md`, `references/metaobjects.md`, `references/prices.md`). Check each operation with `describe_operation` before the first call (path argument names).
 
 ## Cascades (verified 2026-10-26)
 
@@ -38,7 +38,7 @@ This version only creates products, options, option values, variants, the `impor
 
 ## Procedure
 
-1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements, `module:core` for every product of this version and the marker definition), `shared:<key>` (one shared element and the product items tied to it, never the marker definition), or `all`.
+1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements: `module:core` for the products with their options, variants and markers, and the marker definition; `module:taxonomy`, `collections`, `metafields`, `metaobjects` or `prices` for one concept, the products kept), `shared:<key>` (one shared element and the product items tied to it, never the marker definition), or `all`.
 2. `python3 $SKILL/scripts/state.py merge <dir>` then `python3 $SKILL/scripts/state.py undo-plan <dir> --scope <scope>`.
 3. Show counts per kind and what will be archived instead of deleted. Wait for explicit confirmation: this is destructive.
 4. Walk the plan in order (it is sorted children first). For each step:
