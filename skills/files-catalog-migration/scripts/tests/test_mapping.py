@@ -30,6 +30,18 @@ def make_workspace(test):
     return tmp.name
 
 
+def csv_workspace(test, text):
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    os.makedirs(os.path.join(tmp.name, "sources"))
+    with open(os.path.join(tmp.name, "sources", "n.csv"), "w", encoding="utf-8") as f:
+        f.write(text)
+    one = {"version": 1, "concept": "products", "sources": {"main": {"file": "n.csv"}}}
+    cleaner = clean.Cleaner()
+    sources = mapping.load_sources(tmp.name, one, cleaner)
+    return sources, mapping.rows(sources, one, []), cleaner
+
+
 class MappingTest(unittest.TestCase):
     def setUp(self):
         self.dir = make_workspace(self)
@@ -128,6 +140,23 @@ class MappingTest(unittest.TestCase):
         self.assertEqual(self.ev({"from": ["main:coloris", "main:notice"], "pick": "all",
                                   "map": {"Voir notice": None}}, 1), ["Noir"])
 
+    def test_numbers_compared_as_numbers(self):
+        sources, rows, _ = csv_workspace(self, "a;b\n29.9;29,90\n29.9;29,80\n")
+        spec = {"from": ["main:a", "main:b"], "transform": ["decimal"]}
+        warnings = []
+        self.assertEqual(mapping.evaluate(spec, rows[0], sources, warnings, "price"), "29.9")
+        self.assertEqual(warnings, [])
+        mapping.evaluate(spec, rows[1], sources, warnings, "price")
+        self.assertEqual([w["code"] for w in warnings], ["conflict"])
+
+    def test_strip_html_cleaning_counted_for_the_kept_value_only(self):
+        sources, rows, cleaner = csv_workspace(self, "a\tb\n<p>l&rsquo;eau</p>\t<p>l&rsquo;air &hellip;</p>\n")
+        warnings = []
+        spec = {"from": ["main:a", "main:b"], "transform": ["strip_html"]}
+        self.assertEqual(mapping.evaluate(spec, rows[0], sources, warnings, "description"), "l'eau")
+        self.assertEqual([w["code"] for w in warnings], ["conflict"])
+        self.assertEqual(cleaner.counts, {"apostrophe": 1})
+
     def test_conflict_after_map(self):
         spec = {"from": ["main:matiere", "main:coloris"], "map": {"Noir": "Inox"}}
         self.assertEqual(self.ev(spec, 4), "Inox")
@@ -207,8 +236,14 @@ class TransformTest(unittest.TestCase):
 
     def test_strip_html(self):
         html = "<p>Grille-pain&nbsp;2 fentes.<br/>Mati&egrave;re : Inox.</p><ul><li> A </li><li>B</li></ul>"
-        self.assertEqual(mapping.apply_transform(html, "strip_html"),
-                         "Grille-pain 2 fentes.\nMatière : Inox.\nA\nB")
+        self.assertEqual(mapping.apply_transform(html, "strip_html"), "Grille-pain 2 fentes.\nMatière : Inox.\nA\nB")
+        self.assertEqual(mapping.apply_transform("<p>l&rsquo;eau &laquo;chaude&raquo;&hellip;</p>", "strip_html"),
+                         'l\'eau "chaude"...')
+
+    def test_strip_html_cleaning_is_counted(self):
+        cleaner = clean.Cleaner()
+        self.assertEqual(mapping.apply_transform("l&rsquo;eau", "strip_html", cleaner=cleaner), "l'eau")
+        self.assertEqual(cleaner.counts, {"apostrophe": 1})
 
     def test_text_to_html_escapes_and_trims(self):
         self.assertEqual(mapping.apply_transform("<b>\n\n\n x \n", "text_to_html"), "<p>&lt;b&gt;</p><p>x</p>")

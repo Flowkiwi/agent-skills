@@ -407,11 +407,11 @@ def strip_html(value: str) -> str:
     return "\n".join(line.strip() for line in text.split("\n") if line.strip())
 
 
-def apply_transform(value, step, warnings=None, field=None, row=None, handle=None):
+def apply_transform(value, step, warnings=None, field=None, row=None, handle=None, cleaner=None):
     if isinstance(value, list):
         result = []
         for item in value:
-            out = apply_transform(item, step, warnings, field, row, handle)
+            out = apply_transform(item, step, warnings, field, row, handle, cleaner)
             result.extend(out if isinstance(out, list) else [out])
         return [item for item in result if item not in (None, "")]
     if value is None:
@@ -462,7 +462,9 @@ def apply_transform(value, step, warnings=None, field=None, row=None, handle=Non
     if name == "text_to_html":
         return text_to_html(value)
     if name == "strip_html":
-        return strip_html(value)
+        # decoded entities (&nbsp; &rsquo; &hellip;) are cleaned like any cell value
+        text = strip_html(value)
+        return cleaner.text(text) if cleaner is not None else clean.clean_text(text)
     raise MappingError("unknown transform '%s'" % name)
 
 
@@ -494,19 +496,26 @@ def map_value(value, spec):
     return table[value] if value in table else value
 
 
-def convert(value, spec, warnings, field, row, handle):
+def convert(value, spec, warnings, field, row, handle, cleaner=None):
     value = map_value(value, spec)
     for step in spec.get("transform", []):
         if is_empty(value):
             break
-        value = apply_transform(value, step, warnings, field, row, handle)
+        value = apply_transform(value, step, warnings, field, row, handle, cleaner)
     return value
+
+
+def same_value(a, b) -> bool:
+    if isinstance(a, str) and isinstance(b, str) and NUMBER_RE.match(a) and NUMBER_RE.match(b):
+        return Decimal(a) == Decimal(b)
+    return a == b
 
 
 def evaluate(spec: dict, row: Row, sources: Dict[str, LoadedSource], warnings: List[dict], field: str,
              handle: Optional[str] = None):
     if "value" in spec:
         return spec["value"]
+    cleaner = next(iter(sources.values())).cleaner
     candidates = []  # type: List[Tuple[str, str]]
     for ref in spec["from"]:
         source_id, col = resolve(ref, sources)
@@ -515,18 +524,19 @@ def evaluate(spec: dict, row: Row, sources: Dict[str, LoadedSource], warnings: L
             candidates.append((ref, value))
     pick = spec.get("pick", "first")
     if pick == "all":
-        result = convert(dedupe([value for _, value in candidates]), spec, warnings, field, row.row, handle)
+        result = convert(dedupe([value for _, value in candidates]), spec, warnings, field, row.row, handle, cleaner)
         if isinstance(result, list):
             result = dedupe(result)
     elif pick == "join":
         joined = spec.get("sep", "\n").join(value for _, value in candidates) if candidates else None
-        result = convert(joined, spec, warnings, field, row.row, handle)
+        result = convert(joined, spec, warnings, field, row.row, handle, cleaner)
     else:
-        result = convert(candidates[0][1], spec, warnings, field, row.row, handle) if candidates else None
+        result = convert(candidates[0][1], spec, warnings, field, row.row, handle, cleaner) if candidates else None
         if len(candidates) > 1 and spec.get("conflicts", "warn") == "warn":
             first_ref, first_value = candidates[0]
             for ref, value in candidates[1:]:
-                if convert(value, spec, [], field, row.row, handle) != result:
+                quiet = clean.Cleaner({"disabled": cleaner.disabled, "replacements": cleaner.replacements})
+                if not same_value(convert(value, spec, [], field, row.row, handle, quiet), result):
                     warn(warnings, row.row, handle, "conflict", field, "%s = %r (kept) but %s = %r" % (
                         first_ref, first_value, ref, value))
     return spec.get("default") if is_empty(result) else result

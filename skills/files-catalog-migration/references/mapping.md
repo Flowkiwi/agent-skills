@@ -62,7 +62,7 @@ All keys are optional except one of `from` or `value`.
 
 Evaluation order: the cleaned cell values of `from` -> `pick` -> `map` -> each `transform` step -> `default` when the result is empty. A list value (from `pick: all` or `split`) is mapped and transformed element by element; empty elements are dropped.
 
-With `pick: first` and `conflicts: warn`, every other non-empty column of `from` goes through the same `map` and `transform`. A different result adds a `conflict` warning naming each column and its value; the first column wins. `1,8` and `1.8` with `decimal` are the same number: no conflict.
+With `pick: first` and `conflicts: warn`, every other non-empty column of `from` goes through the same `map` and `transform`. A different result adds a `conflict` warning naming each column and its value; the first column wins. Numbers are compared as numbers: `1,8` and `1.8` (or `29,90` and `29.9`) with `decimal` are the same value, no conflict.
 
 `origin`, `reason` and `question` document the decision; they also apply to non-spec objects (the `group` of products). `reason` and `question` are written in the data language (French for a French catalog): they are shown to the client.
 
@@ -70,16 +70,16 @@ With `pick: first` and `conflicts: warn`, every other non-empty column of `from`
 
 A step is a name, or a one-key object for the transforms that take an argument.
 
-| Step                             | Effect                                                                                                                        | Example                                            |
-|----------------------------------|-------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------|
-| `"decimal"`                      | removes spaces and a trailing `€`, `EUR` or `%`, `,` becomes `.`; must then be a plain number, else `not_a_number` and `null` | `1 299,90 €` -> `1299.90`                          |
-| `"integer"`                      | as `decimal`, then a whole number, else `not_a_number` and `null`                                                             | `6.0` -> `6`, `6.5` -> `null`                      |
-| `{"boolean": ["<yes>", "<no>"]}` | `oui yes y true vrai 1 x` (any case) give `<yes>`, `non no n false faux 0` give `<no>`, else `not_a_boolean` and `null`       | `non` -> `Non` with `["Oui", "Non"]`               |
-| `{"split": "<sep>"}`             | list of the stripped non-empty parts                                                                                          | `A / B` -> `["A", "B"]` with `"/"`                 |
-| `{"scale_above": [100, 1000]}`   | a number above the threshold is divided by the divisor (trailing zeros removed) and a `scaled` warning is added               | `1964` -> `1.964`                                  |
-| `{"regex": "<pattern>"}`         | group 1 of the first match, or the whole match without group; no match gives `no_match` and `null`                            | `^(.+?)(?: - Noir)?$` on `Duo - Noir` -> `Duo`     |
-| `"text_to_html"`                 | escapes `&`, `<`, `>`; blank-line separated paragraphs become `<p>...</p>`, a single newline `<br>`                           | `a & b\nc\n\nd` -> `<p>a &amp; b<br>c</p><p>d</p>` |
-| `"strip_html"`                   | `<br>`, `</p>`, `</li>`, `</hN>` become newlines, other tags are removed, entities decoded, empty lines dropped               | `<p>a<br/>b</p>` -> `a\nb`                         |
+| Step                             | Effect                                                                                                                                       | Example                                            |
+|----------------------------------|----------------------------------------------------------------------------------------------------------------------------------------------|----------------------------------------------------|
+| `"decimal"`                      | removes spaces and a trailing `€`, `EUR` or `%`, `,` becomes `.`; must then be a plain number, else `not_a_number` and `null`                | `1 299,90 €` -> `1299.90`                          |
+| `"integer"`                      | as `decimal`, then a whole number, else `not_a_number` and `null`                                                                            | `6.0` -> `6`, `6.5` -> `null`                      |
+| `{"boolean": ["<yes>", "<no>"]}` | `oui yes y true vrai 1 x` (any case) give `<yes>`, `non no n false faux 0` give `<no>`, else `not_a_boolean` and `null`                      | `non` -> `Non` with `["Oui", "Non"]`               |
+| `{"split": "<sep>"}`             | list of the stripped non-empty parts                                                                                                         | `A / B` -> `["A", "B"]` with `"/"`                 |
+| `{"scale_above": [100, 1000]}`   | a number above the threshold is divided by the divisor (trailing zeros removed) and a `scaled` warning is added                              | `1964` -> `1.964`                                  |
+| `{"regex": "<pattern>"}`         | group 1 of the first match, or the whole match without group; no match gives `no_match` and `null`                                           | `^(.+?)(?: - Noir)?$` on `Duo - Noir` -> `Duo`     |
+| `"text_to_html"`                 | escapes `&`, `<`, `>`; blank-line separated paragraphs become `<p>...</p>`, a single newline `<br>`                                          | `a & b\nc\n\nd` -> `<p>a &amp; b<br>c</p><p>d</p>` |
+| `"strip_html"`                   | `<br>`, `</p>`, `</li>`, `</hN>` become newlines, other tags removed, entities decoded, empty lines dropped, then cleaned (`&rsquo;` -> `'`) | `<p>a<br/>b</p>` -> `a\nb`                         |
 
 Put `decimal` before `scale_above`. Steps after a step returning `null` are skipped.
 
