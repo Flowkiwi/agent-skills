@@ -8,6 +8,7 @@ Usage:
   python3 state.py decide <dir> --key <name> --value-json '<json>' | --value-file <file.json>
                           --origin developer|agent|client [--reason "<text in the data language>"]
   python3 state.py worklists <dir> --workers 4 [--limit 5] [--pilot] [--handles a,b] [--retry-failed] [--module <name>]
+  python3 state.py worklists <dir> --workers 4 --update [--retry-failed] [--handles a,b]   # reads diff.json
   python3 state.py result <results/worker-N.jsonl> --json '<line>' | --json - | --json-file <file>
   python3 state.py merge <dir>
   python3 state.py phase <dir> [--start]
@@ -216,15 +217,206 @@ def pilot_selection(products, candidates, limit):
     return selected
 
 
+PLACEHOLDER = re.compile(r"^<(.+) IRI>$")
+
+
+def _resolved(value, shared):
+    """A diff.json value with its `<key IRI>` placeholders replaced by the shared IRIs recorded since."""
+    if isinstance(value, str):
+        match = PLACEHOLDER.match(value)
+        entry = shared.get(match.group(1)) if match else None
+        return entry["iri"] if entry and entry.get("iri") else value
+    if isinstance(value, list):
+        return [_resolved(v, shared) for v in value]
+    if isinstance(value, dict):
+        return {k: _resolved(v, shared) for k, v in value.items()}
+    return value
+
+
+def _change_applied(written, change, shared):
+    """True when the written snapshot already holds every change of a diff.json `changed` entry: an update
+    merged since diff.py ran (a deferred variant is left out of the snapshot, so it is still to do)."""
+    import diff  # function-level: diff imports state
+
+    change = _resolved(change, shared)
+    body = (written.get("product") or {}).get("body") or {}
+    if any(diff._view(name, body.get(name)) != diff._view(name, new)
+           for name, (_, new) in change.get("product", {}).items()):
+        return False
+    now = {
+        "options": {o["title"]: [v["value"] for v in o["values"]] for o in written.get("options") or []},
+        "variants": {v["sku"]: v for v in written.get("variants") or []},
+        "metafields": {e["key"]: e["body"].get("value") for e in written.get("metafields") or []},
+        "prices": {f"{e['sku']}:{e['country']}": e["body"] for e in written.get("prices") or []},
+    }
+    for group, entries in now.items():
+        part = change.get(group, {})
+        if any(k not in entries for k in part.get("added", [])) or any(k in entries for k in part.get("removed", [])):
+            return False
+    options = change.get("options", {})
+    if any(v not in now["options"].get(t, []) for t, values in options.get("values_added", {}).items() for v in values):
+        return False
+    if any(v in now["options"].get(t, []) for t, values in options.get("values_removed", {}).items() for v in values):
+        return False
+    for sku, fields in change.get("variants", {}).get("changed", {}).items():
+        if any(now["variants"].get(sku, {}).get(name) != new for name, (_, new) in fields.items()):
+            return False
+    return all(now[group].get(key) == new for group in ("metafields", "prices")
+               for key, (_, new) in change.get(group, {}).get("changed", {}).items())
+
+
+def _gives_away(product, skus):
+    """SKUs of `skus` that are still a created variant of the product."""
+    return [s for s in skus if any(i["kind"] == "variant" and i.get("ref") == s and i.get("status") == "created"
+                                   for i in product["items"])]
+
+
+def update_selection(state, diff_data, retry_failed=False, skipped=None):
+    """The next pass of an update run from diff.json: ("deletions", handles) while rekeyed products are to delete
+    or products still hold a SKU moving to another one (they are merged before the receivers are updated or
+    created), else ("updates", handles): the changed handles, then the removed ones. Also returns the handles
+    whose action is a deletion. Never selected (in `skipped` with the reason): unmanaged handles, unforced
+    conflicts, a deletion whose receiver has an unforced conflict, a failed update without retry_failed, a
+    product waiting for a SKU still held by another one; handles already done in this phase are left out."""
+    import payload  # function-level: payload imports state
+
+    phase = state.get("phase", 1)
+    if diff_data is None:
+        raise ValueError("--update needs diff.json: run diff.py <dir> first")
+    if diff_data.get("phase") != phase:
+        raise ValueError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    skipped = {} if skipped is None else skipped
+    entries = state["products"]
+    unmanaged = set(diff_data.get("unmanaged") or [])
+    conflicts = diff_data.get("conflicts") or {}
+    removal = diff_data.get("removal") or {}
+    changed = diff_data.get("changed") or {}
+
+    def conflicted(handle):
+        return handle in conflicts and not forced(state, handle)
+
+    def eligible(handle):
+        product = entries.get(handle)
+        if product is None or product["status"] == "deleted":
+            return False
+        if handle in unmanaged:
+            skipped[handle] = "unmanaged (reused): never written"
+        elif conflicted(handle):
+            skipped[handle] = ("modified in Flowkiwi since the last import (diff.json conflicts): "
+                               "force_update to update it")
+        elif product.get("error") and not retry_failed:
+            skipped[handle] = f"failed: {product['error']} (--retry-failed to try again)"
+        else:
+            return True
+        return False
+
+    def receivers_conflicted(handle, receivers):
+        stuck = [r for r in receivers if conflicted(r)]
+        if stuck:
+            skipped[handle] = (f"gives its SKUs to {', '.join(stuck)}, modified in Flowkiwi since the last import: "
+                               "force_update or resolve the conflict first")
+        return bool(stuck)
+
+    first, updates, deletes = [], [], set()
+    moved = {}
+    for entry in diff_data.get("moved") or []:
+        moved.setdefault(entry["from"], []).append(entry)
+    for handle, change in changed.items():
+        if not eligible(handle):
+            continue
+        product = entries[handle]
+        giving = [m for m in moved.get(handle, []) if _gives_away(product, [m["sku"]])]
+        if giving:
+            if not receivers_conflicted(handle, [r for m in giving for r in m.get("to") or []]):
+                first.append(handle)
+            continue
+        if product.get("updated_phase") == phase:
+            written = (product.get("written") or {}).get("payload") or {}
+            if _change_applied(written, change, state.get("shared", {})):
+                continue
+            held = [(sku, payload._held_elsewhere(state, handle, sku))
+                    for sku in change.get("variants", {}).get("added", [])]
+            held = [f"SKU {sku} held by {other}" for sku, other in held if other]
+            if held:
+                skipped[handle] = f"waits for {', '.join(held)} (deferred creation)"
+                continue
+        updates.append(handle)
+
+    action = None
+    for handle in list(diff_data.get("removed") or []) + list(diff_data.get("already_archived") or []):
+        if not eligible(handle):
+            continue
+        status = entries[handle]["status"]
+        kind = removal.get(handle, "removed_action")
+        if kind == "delete_rekeyed":
+            receivers = [r for e in diff_data.get("rekeyed") or [] if e.get("removed") == handle
+                         for r in e.get("changed") or []]
+            if receivers_conflicted(handle, receivers):
+                continue
+            if phase_decision(state, "confirmed_rekey") is None:
+                raise ValueError(f"rekeyed products need decision confirmed_rekey for phase {phase}")
+            first.append(handle)
+            deletes.add(handle)
+        elif kind == "archive_blocked":
+            if status == "created":
+                updates.append(handle)
+        else:
+            decision = phase_decision(state, "removed_action")
+            action = decision.get("action") if isinstance(decision, dict) else None
+            if action not in ("archive", "delete"):
+                if status != "created":
+                    continue
+                raise ValueError(f"removed products need decision removed_action for phase {phase}")
+            if status == "created" or action == "delete":
+                updates.append(handle)
+                if action == "delete":
+                    deletes.add(handle)
+    if first:
+        return "deletions", first, deletes
+    return "updates", updates, deletes
+
+
+def _creation_holders(state, candidates, products):
+    """In a later phase, a product to create whose SKU is still a created variant of another product waits for
+    the update run that deletes it (rekeyed or moved SKUs)."""
+    import payload  # function-level: payload imports state
+
+    waiting = {}
+    for p in products:
+        if p["handle"] not in candidates:
+            continue
+        held = [(v["sku"], payload._held_elsewhere(state, p["handle"], v["sku"])) for v in p.get("variants") or []]
+        held = [f"SKU {sku} held by {other}" for sku, other in held if other]
+        if held:
+            waiting[p["handle"]] = f"waits for {', '.join(held)}: run state.py worklists --update first"
+    return waiting
+
+
 def worklists(state, workers, limit, pilot, retry_failed=False, module=None, titles=None, handles=None,
-              products=None):
+              products=None, update=False, diff_data=None, report=None):
     """Split handles between workers; handles sharing a title go to the same worker (orphan rule safety).
-    `handles` is an explicit selection, `products` (products.json entries) enables the representative pilot."""
-    if module:
+    `handles` is an explicit selection, `products` (products.json entries) enables the representative pilot.
+    `update` selects the next pass of an update run from `diff_data` (update_selection); its deletions all go
+    to one worker (each `state.py deleted` writes the state). `report` (a dict) receives `skipped`
+    ({handle: reason}) and, for an update run, `pass`."""
+    skipped = {}
+    deletes = set()
+    if update:
+        if pilot or module:
+            raise ValueError("--pilot and --module do not apply to --update")
+        name, candidates, deletes = update_selection(state, diff_data, retry_failed, skipped)
+        if report is not None:
+            report["pass"] = name
+    elif module:
         candidates = [h for h, p in state["products"].items() if p["status"] == "created" and _needs_module(p, module)]
     else:
         wanted = {"pending", "failed"} if retry_failed else {"pending"}
         candidates = [h for h, p in state["products"].items() if p["status"] in wanted]
+        if products and state.get("phase", 1) > 1:
+            skipped.update(_creation_holders(state, set(candidates), products))
+            candidates = [h for h in candidates if h not in skipped]
+    if report is not None:
+        report["skipped"] = skipped
     if pilot and limit is None:
         limit = 5
     if handles:
@@ -234,7 +426,12 @@ def worklists(state, workers, limit, pilot, retry_failed=False, module=None, tit
                 raise ValueError(f"unknown handle '{handle}'")
             if handle not in eligible:
                 status = state["products"][handle]["status"]
-                hint = f"no {module} item missing" if module else "use --retry-failed for failed products"
+                if handle in skipped:
+                    hint = skipped[handle]
+                elif update:
+                    hint = "nothing to do in this pass of the update run"
+                else:
+                    hint = f"no {module} item missing" if module else "use --retry-failed for failed products"
                 raise ValueError(f"handle '{handle}' is {status}, not eligible ({hint})")
         selection = list(dict.fromkeys(handles))
     elif pilot and products:
@@ -250,8 +447,12 @@ def worklists(state, workers, limit, pilot, retry_failed=False, module=None, tit
             state["products"][h]["pilot"] = True
     groups = {}
     for h in handles:
-        title = ((titles or {}).get(h) or h).strip().lower()
-        groups.setdefault(title, []).append(h)
+        if h in deletes:
+            groups.setdefault(None, []).append(h)
+    for h in handles:
+        if h not in deletes:
+            title = ((titles or {}).get(h) or h).strip().lower()
+            groups.setdefault(title, []).append(h)
     lists = [[] for _ in range(max(workers, 1))]
     for i, group in enumerate(groups.values()):
         lists[i % len(lists)].extend(group)
@@ -735,6 +936,7 @@ def main(argv):
     p.add_argument("--retry-failed", action="store_true")
     p.add_argument("--module")
     p.add_argument("--handles", help="comma-separated explicit selection")
+    p.add_argument("--update", action="store_true", help="next pass of the update run of diff.json")
 
     p = sub.add_parser("result")
     p.add_argument("file")
@@ -820,9 +1022,14 @@ def main(argv):
         products = _read_json(products_path)["products"] if os.path.exists(products_path) else []
         titles = {p["handle"]: p.get("title") for p in products}
         selection = [h.strip() for h in args.handles.split(",") if h.strip()] if args.handles else None
+        report = {}
         try:
+            diff_data = None
+            diff_path = os.path.join(args.dir, "diff.json")
+            if args.update and os.path.exists(diff_path):
+                diff_data = _read_json(diff_path)
             lists = worklists(state, args.workers, args.limit, args.pilot, args.retry_failed, args.module, titles,
-                              selection, products)
+                              selection, products, args.update, diff_data, report)
         except ValueError as error:
             print(f"error: {error}", file=sys.stderr)
             return 1
@@ -830,7 +1037,12 @@ def main(argv):
             os.remove(path)
         for i, handles in enumerate(lists, start=1):
             _write_json(os.path.join(args.dir, "worklists", f"worker-{i}.json"), handles)
-        print(json.dumps({"merged_before": merged, "workers": len(lists), "products": sum(len(l) for l in lists)}))
+        output = {"merged_before": merged, "workers": len(lists), "products": sum(len(l) for l in lists)}
+        if args.update:
+            output["pass"] = report["pass"]
+        if report["skipped"]:
+            output["skipped"] = report["skipped"]
+        print(json.dumps(output, ensure_ascii=False))
     elif args.command == "merge":
         print(f"{_merge_results(args.dir, state)} result lines merged")
         _write_json(state_path, state)
