@@ -45,6 +45,7 @@ MAIN_NS = "http://schemas.openxmlformats.org/spreadsheetml/2006/main"
 REL_NS = "http://schemas.openxmlformats.org/officeDocument/2006/relationships"
 PKG_REL_NS = "http://schemas.openxmlformats.org/package/2006/relationships"
 DATE_STYLE = 1
+PADDED_STYLES = {"pad13": 2, "pad5": 3}  # number formats 0000000000000 and 00000
 
 
 def column_letter(index):
@@ -90,6 +91,8 @@ def cell_xml(value, ref, strings):
         return "<c%s><v>%s</v></c>" % (attrs, payload)
     if kind == "date":
         return '<c%s s="%d"><v>%s</v></c>' % (attrs, DATE_STYLE, payload)
+    if kind in PADDED_STYLES:
+        return '<c%s s="%d"><v>%s</v></c>' % (attrs, PADDED_STYLES[kind], payload)
     if kind in ("b", "e"):
         return '<c%s t="%s"><v>%s</v></c>' % (attrs, kind, escape(payload))
     raise ValueError("unknown demo cell kind: %r" % kind)
@@ -116,12 +119,16 @@ def sheet_xml(sheet, strings):
 
 STYLES = (
     '<styleSheet xmlns="%s">'
+    '<numFmts count="2"><numFmt numFmtId="164" formatCode="0000000000000"/>'
+    '<numFmt numFmtId="165" formatCode="00000"/></numFmts>'
     '<fonts count="1"><font><sz val="11"/><name val="Calibri"/></font></fonts>'
     '<fills count="1"><fill><patternFill patternType="none"/></fill></fills>'
     '<borders count="1"><border><left/><right/><top/><bottom/><diagonal/></border></borders>'
     '<cellStyleXfs count="1"><xf numFmtId="0" fontId="0" fillId="0" borderId="0"/></cellStyleXfs>'
-    '<cellXfs count="2"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
-    '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'
+    '<cellXfs count="4"><xf numFmtId="0" fontId="0" fillId="0" borderId="0" xfId="0"/>'
+    '<xf numFmtId="14" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    '<xf numFmtId="164" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/>'
+    '<xf numFmtId="165" fontId="0" fillId="0" borderId="0" xfId="0" applyNumberFormat="1"/></cellXfs>'
     '</styleSheet>' % MAIN_NS
 )
 

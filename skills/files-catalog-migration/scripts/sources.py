@@ -25,6 +25,7 @@ CELL_REF_RE = re.compile(r"^\$?([A-Za-z]{1,3})\$?(\d*)$")
 INTEGER_RE = re.compile(r"^[+-]?\d+$")
 XSTRING_ESCAPE_RE = re.compile(r"_x([0-9A-Fa-f]{4})_")
 FORMAT_LITERAL_RE = re.compile(r'"[^"]*"|\[[^\]]*\]|\\.|[_*].')
+ZERO_PAD_RE = re.compile(r"^0{2,}$")
 
 csv.field_size_limit(min(sys.maxsize, 2 ** 31 - 1))  # long HTML descriptions
 
@@ -174,29 +175,50 @@ def read_shared_strings(package, name):
     return strings
 
 
-def read_date_styles(package, name):
-    """Indexes of the cellXfs entries whose number format displays a date."""
+def zero_pad_width(code):
+    """Width of a number format made of zeros only (0000000000000 for an EAN stored as a number), else None."""
+    return len(code) if ZERO_PAD_RE.match(code or "") else None
+
+
+def read_styles(package, name):
+    """(indexes of the cellXfs entries whose number format displays a date,
+    {index: width} of those whose number format pads integers with leading zeros)."""
     if not name or not package.has(name):
-        return set()
+        return set(), {}
     root = package.parse(name)
     custom = {}
     for numfmts in children(root, "numFmts"):
         for numfmt in children(numfmts, "numFmt"):
             custom[numfmt.get("numFmtId")] = numfmt.get("formatCode", "")
-    dates = set()
+    dates, padded = set(), {}
     for cellxfs in children(root, "cellXfs"):
         for index, xf in enumerate(children(cellxfs, "xf")):
             fmt_id = xf.get("numFmtId", "0")
             if fmt_id in custom:
                 is_date = is_date_format(custom[fmt_id])
+                width = zero_pad_width(custom[fmt_id])
+                if width:
+                    padded[index] = width
             else:
                 is_date = fmt_id.isdigit() and int(fmt_id) in DATE_FORMAT_IDS
             if is_date:
                 dates.add(index)
-    return dates
+    return dates, padded
 
 
-def cell_value(cell, strings, date_styles, date1904):
+def read_date_styles(package, name):
+    """Indexes of the cellXfs entries whose number format displays a date."""
+    return read_styles(package, name)[0]
+
+
+def pad_integer(text, width):
+    if not INTEGER_RE.match(text):
+        return text
+    sign = text[0] if text[0] in "+-" else ""
+    return (sign if sign == "-" else "") + text[len(sign):].zfill(width)
+
+
+def cell_value(cell, strings, date_styles, date1904, padded=None):
     kind = cell.get("t", "n")
     if kind == "inlineStr":
         boxes = children(cell, "is")
@@ -222,10 +244,13 @@ def cell_value(cell, strings, date_styles, date1904):
             return excel_date(float(raw), date1904)
         except (ValueError, OverflowError):
             return raw
-    return excel_number_text(raw)
+    text = excel_number_text(raw)
+    if padded and style is not None and style.isdigit() and int(style) in padded:
+        return pad_integer(text, padded[int(style)])
+    return text
 
 
-def read_worksheet(package, name, strings, date_styles, date1904):
+def read_worksheet(package, name, strings, date_styles, date1904, padded=None):
     """({row index: {column index: value}}, merged refs), 0-based indexes."""
     cells = {}  # type: Dict[int, Dict[int, str]]
     merged = []
@@ -248,7 +273,7 @@ def read_worksheet(package, name, strings, date_styles, date1904):
             for cell in row_cells:
                 match = CELL_REF_RE.match(cell.get("r", ""))
                 col = column_index(match.group(1)) if match else col + 1
-                value = cell_value(cell, strings, date_styles, date1904)
+                value = cell_value(cell, strings, date_styles, date1904, padded)
                 if value is not None:
                     cells.setdefault(row_index, {})[col] = value
             element.clear()
@@ -273,7 +298,7 @@ def read_xlsx(path):
         for rel_type, target in rels.values():
             by_type.setdefault(rel_type.rsplit("/", 1)[-1], target)
         strings = read_shared_strings(package, by_type.get("sharedStrings", "xl/sharedStrings.xml"))
-        date_styles = read_date_styles(package, by_type.get("styles", "xl/styles.xml"))
+        date_styles, padded = read_styles(package, by_type.get("styles", "xl/styles.xml"))
         date1904 = any(pr.get("date1904", "").lower() in ("1", "true") for pr in children(workbook, "workbookPr"))
         tables = []
         for sheets in children(workbook, "sheets"):
@@ -281,7 +306,7 @@ def read_xlsx(path):
                 rel_type, target = rels.get(attribute(sheet, "id"), ("", ""))
                 if not rel_type.endswith("/worksheet") or not package.has(target):
                     continue
-                cells, merged = read_worksheet(package, target, strings, date_styles, date1904)
+                cells, merged = read_worksheet(package, target, strings, date_styles, date1904, padded)
                 hidden = sheet.get("state", "visible") in ("hidden", "veryHidden")
                 tables.append(Table(file, sheet.get("name", ""), to_rows(cells), merged, hidden))
         return tables

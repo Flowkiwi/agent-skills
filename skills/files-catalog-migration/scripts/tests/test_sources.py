@@ -61,6 +61,19 @@ class XlsxTest(TmpDirTest):
         demo_files.write_xlsx(self.other, [{"name": "S", "rows": [[("b", "1"), ("e", "#N/A"), ("date", 0)]]}], date1904=True)
         self.assertEqual(sources.read_xlsx(self.other)[0].rows[0], ["TRUE", None, "1904-01-01"])
 
+    def test_zero_padded_number_formats_keep_their_leading_zeros(self):
+        demo_files.write_xlsx(self.other, [{"name": "S", "rows": [
+            [("pad13", "12345678905"), ("pad5", "42"), ("pad13", "1.2345678905E10"), ("pad5", "123456"),
+             ("pad5", "1.5"), ("n", "42")]]}])
+        self.assertEqual(sources.read_xlsx(self.other)[0].rows[0],
+                         ["0012345678905", "00042", "0012345678905", "123456", "1.5", "42"])
+
+    def test_zero_pad_width(self):
+        self.assertEqual(sources.zero_pad_width("0000000000000"), 13)
+        self.assertEqual(sources.zero_pad_width("00000"), 5)
+        for code in ("0", "0.00", "#,##0", '"EAN "0000', "General", ""):
+            self.assertIsNone(sources.zero_pad_width(code), code)
+
     def test_helpers(self):
         self.assertEqual(sources.column_letter(26), "AA")
         self.assertEqual(sources.column_index("CH"), 85)
