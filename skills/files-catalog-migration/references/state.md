@@ -116,8 +116,8 @@ After a change that skips products, run `state.py sync <dir>`.
 - Shared entry `spec`: what was asked when the element was created (type, name...), copied from the `plan_shared.py` entry, to detect a later drift.
 - Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
 - Item `ref`: names the item in the product, so a later phase can match it: the SKU of a `variant`, the title of a `product_option`, `<option title>:<value>` of an `option_value`, `namespace.key` of a `metafield`.
-- Item `shared`: the shared key the item depends on (`metafield_definition:import.key` for the marker). Used by the undo scope `shared:<key>`.
-- Shared keys are `<kind>:<name>`. Item kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `channel`, `country`.
+- Item `shared`: the shared key the item depends on (`metafield_definition:import.key` for the marker). Used by the undo scope `shared:<key>`. A metafield item takes the module of its shared definition: `metaobjects` for a reference metafield (`metafield_definition:<namespace>.<key>` recorded with module `metaobjects`), so `worklists --module metaobjects` finds the products created before the metaobjects.
+- Shared keys are `<kind>:<name>`: `metafield_definition:<namespace>.<key>`, `category:<path>`, `attribute_definition:<code>`, `attribute_option:<code>:<value>`, `collection:<path>`, `metaobject_definition:<type>`, `metaobject:<type>:<entry handle>`. Item and shared kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `metaobject`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `metaobject_definition`, `channel`, `country`; within a kind, the last created goes first.
 
 ## Worker result line
 

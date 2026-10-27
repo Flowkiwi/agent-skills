@@ -27,8 +27,8 @@ from datetime import datetime, timezone
 
 KIND_ORDER = [
     "sale_offer", "purchase_offer", "metafield", "variant", "option_value", "product_option", "product",
-    "collection", "attribute_option", "attribute_definition", "category", "supplier", "tax",
-    "metafield_definition", "channel", "country",
+    "collection", "metaobject", "attribute_option", "attribute_definition", "category", "supplier", "tax",
+    "metafield_definition", "metaobject_definition", "channel", "country",
 ]
 ORIGINS = ("developer", "agent", "client")
 RESULT_KEYS = {"handle", "status", "iri", "items", "error"}

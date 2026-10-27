@@ -4,25 +4,27 @@ Removes what this migration created. Never touches items recorded `reused` or te
 
 ## Available operations (checked 2026-10-26)
 
-| Kind                   | How                                                                                                                                              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
-| `sale_offer`           | **no delete operation**: `update_sale_offer` with `status: /api/statuses/ARCHIVED`, unless its variant is deleted in the same run (then skip it) |
-| `purchase_offer`       | **no delete operation**: `update_purchase_offer` with `status: /api/statuses/ARCHIVED`, same rule                                                |
-| `metafield`            | `delete_metafield`                                                                                                                               |
-| `variant`              | `delete_variant`                                                                                                                                 |
-| `option_value`         | `delete_option_value`                                                                                                                            |
-| `product_option`       | `delete_product_option`                                                                                                                          |
-| `*_link`               | `update_product` removing the relation; skip when the product is deleted in the same run                                                         |
-| `product`              | `delete_product`                                                                                                                                 |
-| `collection`           | `delete_collection`                                                                                                                              |
-| `attribute_option`     | `delete_attribute_option`                                                                                                                        |
-| `attribute_definition` | `delete_attribute_definition`                                                                                                                    |
-| `category`             | `delete_category`                                                                                                                                |
-| `supplier`             | `delete_supplier`                                                                                                                                |
-| `tax`                  | `delete_tax`                                                                                                                                     |
-| `metafield_definition` | `delete_metafield_definition`                                                                                                                    |
-| `channel`              | `delete_channel`                                                                                                                                 |
-| `country`              | `delete_country`                                                                                                                                 |
+| Kind                    | How                                                                                                                                              |
+| ----------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `sale_offer`            | **no delete operation**: `update_sale_offer` with `status: /api/statuses/ARCHIVED`, unless its variant is deleted in the same run (then skip it) |
+| `purchase_offer`        | **no delete operation**: `update_purchase_offer` with `status: /api/statuses/ARCHIVED`, same rule                                                |
+| `metafield`             | `delete_metafield`                                                                                                                               |
+| `variant`               | `delete_variant`                                                                                                                                 |
+| `option_value`          | `delete_option_value`                                                                                                                            |
+| `product_option`        | `delete_product_option`                                                                                                                          |
+| `*_link`                | `update_product` removing the relation; skip when the product is deleted in the same run                                                         |
+| `product`               | `delete_product`                                                                                                                                 |
+| `collection`            | `delete_collection`                                                                                                                              |
+| `metaobject`            | `delete_metaobject`                                                                                                                              |
+| `attribute_option`      | `delete_attribute_option`                                                                                                                        |
+| `attribute_definition`  | `delete_attribute_definition`                                                                                                                    |
+| `category`              | `delete_category`                                                                                                                                |
+| `supplier`              | `delete_supplier`                                                                                                                                |
+| `tax`                   | `delete_tax`                                                                                                                                     |
+| `metafield_definition`  | `delete_metafield_definition`                                                                                                                    |
+| `metaobject_definition` | `delete_metaobject_definition`                                                                                                                   |
+| `channel`               | `delete_channel`                                                                                                                                 |
+| `country`               | `delete_country`                                                                                                                                 |
 
 This version only creates products, options, option values, variants, the `import.key` marker metafields and the marker definition; the other kinds come with later concepts. Check each operation with `describe_operation` before the first call (path argument names).
 
@@ -32,6 +34,7 @@ This version only creates products, options, option values, variants, the `impor
 - Deleting a **product** is refused with 409 `product.cannot_delete_with_variants` while it has variants. Once its variants are gone, deleting it also deletes its options, option values and metafields (the `import.key` marker included).
 - So, for a product in the plan: delete its variants, then the product, and record **all** its items as deleted (offers, metafields, options, option values included).
 - A 404 on a later step means the item already went with its parent: count it as deleted.
+- Metaobjects (`references/metaobjects.md`): the reference metafields go with the products, then the entries (an entry referencing another before its target), the reference metafield definitions and last the metaobject definitions. A 409 on a definition still used (entries or a metafield definition created outside this migration) is reported, not forced.
 
 ## Procedure
 
@@ -45,6 +48,6 @@ This version only creates products, options, option values, variants, the `impor
 5. Write the IRIs actually deleted or archived to `<dir>/undo/deleted-<YYYYMMDD-HHMMSS>.json` (a JSON array), then `python3 $SKILL/scripts/state.py deleted <dir> --iris-file <that file>`.
 6. Report: deleted, archived, already gone, refused (with reason). Products whose `product` item was deleted are now `deleted` in the state; a later run does not recreate them.
 
-Items tied to a shared element carry its key in `"shared"` (the marker metafields record `metafield_definition:import.key`). With `shared:<key>` the plan lists the created items with that key, then the shared element itself if this migration created it. The marker definition `metafield_definition:import.key` is deleted last, and only on a full undo (`all` or `module:core`): without it, no product of this migration can be found again by marker and a later run would duplicate them. `state.py undo-plan` refuses the scope `shared:metafield_definition:import.key` (exit 1, use `all` or `module:core`).
+Items tied to a shared element carry its key in `"shared"` (the marker metafields record `metafield_definition:import.key`). With `shared:<key>` the plan lists the created items with that key, then the shared element itself if this migration created it. The marker definition `metafield_definition:import.key` is deleted after the other metafield definitions, and only on a full undo (`all` or `module:core`): without it, no product of this migration can be found again by marker and a later run would duplicate them. `state.py undo-plan` refuses the scope `shared:metafield_definition:import.key` (exit 1, use `all` or `module:core`).
 
 Expected flow after a bad pilot: undo `pilot`, fix the mapping or the decision (`state.py decide`) and extract again, `python3 $SKILL/scripts/state.py reset-deleted <dir>` (deleted products become `pending` again, with no items), then rerun the pilot.

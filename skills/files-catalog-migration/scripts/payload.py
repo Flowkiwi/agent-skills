@@ -17,7 +17,9 @@ Module fields come from machine-readable decisions: `taxonomy` as written by tax
 collections, to send with its existing ones), and `metafields` as
 {"definitions": {"<namespace.key>": {"type": "<flowkiwi type>", "name": "...", "transform": null,
 "source": "<products.json metafield key, when renamed>"}}}
-with transform null (value as is), list_json, list, number, json or strip_html.
+with transform null (value as is), list_json, list, number, json or strip_html. The reference metafields of
+`metaobjects` (as written by metaobjects.py build) follow in the --step metafields output: definition IRI from shared
+`metafield_definition:<namespace.key>`, value the IRI of shared `metaobject:<type>:<entry handle>`.
 """
 
 import argparse
@@ -205,10 +207,26 @@ def transform_value(value, transform):
     return value
 
 
-def metafields(product, state, placeholders=False):
-    decision = _module_decision(state.get("decisions", {}), "metafields", "definitions")
+def reference_metafields(product, state, placeholders=False):
+    decision = _module_decision(state.get("decisions", {}), "metaobjects", "definitions")
     if decision is None:
         return []
+    result = []
+    entries = (decision.get("values") or {}).get(product["handle"]) or {}
+    for definition in decision["definitions"]:
+        reference, entry = definition.get("reference"), entries.get(definition["type"])
+        if not reference or not entry:
+            continue
+        key = reference["metafield"]
+        shared_key = f"metafield_definition:{key}"
+        body = {"definition": shared_iri(state, shared_key, placeholders),
+                "value": shared_iri(state, f"metaobject:{definition['type']}:{entry}", placeholders)}
+        result.append({"key": key, "shared": shared_key, "body": body})
+    return result
+
+
+def metafields(product, state, placeholders=False):
+    decision = _module_decision(state.get("decisions", {}), "metafields", "definitions") or {"definitions": {}}
     result = []
     values = decision.get("values")
     for key, definition in sorted(decision["definitions"].items()):
@@ -223,7 +241,7 @@ def metafields(product, state, placeholders=False):
         body = {"definition": shared_iri(state, shared_key, placeholders),
                 "value": transform_value(value, definition.get("transform"))}
         result.append({"key": key, "shared": shared_key, "body": body})
-    return result
+    return result + reference_metafields(product, state, placeholders)
 
 
 def build(products, state, handle, step="all", placeholders=False):
