@@ -3,10 +3,11 @@
 Usage:
   python3 dryrun.py <dir>
 
-Reads products.json, state.json (optional) and mappings/*.json. Exit code 1 when blocking warnings remain, when
-products.json and state.json disagree (a created product whose handle is gone, handles not synced), when
-payload.py would fail for a product to create, or when the status_mode / data_language decisions are missing
-or invalid.
+Reads products.json, state.json (optional), mappings/*.json and concepts/*.json. Exit code 1 when blocking
+warnings remain (list_in_single_field in a concept file included), when products.json and state.json disagree
+(a created product whose handle is gone, handles not synced), when payload.py would fail for a product to create,
+when a concept file differs from its decision in state.json (warnings aside: run state.py decide again), or when
+the status_mode / data_language decisions are missing or invalid.
 """
 
 import glob
@@ -17,12 +18,15 @@ from typing import List, Tuple
 
 import catalog
 import payload
+from metafields import suggest_type
 
 REQUIRED_DECISIONS = ("status_mode", "data_language")
 STATUS_MODES = ("draft", "active", "source")
 MAX_CANDIDATES = 3
 MAX_PAYLOAD_ERRORS = 10
 SPEC_RESERVED = ("origin", "reason", "question")
+CONCEPTS = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
+CONCEPT_BLOCKING = ("list_in_single_field",)
 
 
 def read_json(path):
@@ -141,6 +145,84 @@ def descriptions(data):
     return lines
 
 
+def without_warnings(value):
+    return {k: v for k, v in value.items() if k != "warnings"} if isinstance(value, dict) else value
+
+
+def concept_files(directory: str) -> List[Tuple[str, dict]]:
+    found = []
+    for concept in CONCEPTS:
+        path = os.path.join(directory, "concepts", concept + ".json")
+        if os.path.exists(path):
+            found.append((concept, read_json(path)))
+    return found
+
+
+def stale_decisions(files, decisions) -> List[str]:
+    """A concept file must be the recorded decision; both are compared without their warnings."""
+    return ["  stale decision: %s (run state.py decide <dir> --key %s --value-file concepts/%s.json "
+            "--origin developer)" % (concept, concept, concept)
+            for concept, data in files if without_warnings(decisions.get(concept)) != without_warnings(data)]
+
+
+def indented(text: str, prefix: str) -> List[str]:
+    return [prefix + line for line in text.splitlines()]
+
+
+def concept_blocking(files) -> List[str]:
+    lines = []
+    for concept, data in files:
+        found = [w for w in data.get("warnings") or [] if w.get("code") in CONCEPT_BLOCKING]
+        if found:
+            lines += ["  %s:" % concept] + indented(catalog.format_warnings(found), "    ")
+    return lines
+
+
+def metafield_rows(data) -> List[str]:
+    values = {}  # type: dict
+    for product_values in (data.get("values") or {}).values():
+        for key, value in product_values.items():
+            values.setdefault(key, []).append(json.dumps(value, ensure_ascii=False)
+                                              if isinstance(value, list) else str(value))
+    rows = [[key, d.get("name") or "", "proposed %s" % suggest_type(values.get(key, []))[0],
+             "chosen %s" % d.get("type"), "%d values" % len(values.get(key, []))]
+            for key, d in (data.get("definitions") or {}).items()]
+    widths = [max(len(row[i]) for row in rows) for i in range(len(rows[0]) - 1)] if rows else []
+    return ["    " + " | ".join([cell.ljust(width) for cell, width in zip(row, widths)] + row[-1:]) for row in rows]
+
+
+def concept_lines(concept: str, data: dict, products: List[dict]) -> List[str]:
+    if concept == "taxonomy":
+        attributes = data.get("attributes") or []
+        options = sum(len(a.get("options") or []) for a in attributes if a.get("type", "list") == "list")
+        return ["  taxonomy: %d categories, %d attribute definitions, %d options, %d products without category" % (
+            len(data.get("categories") or []), len(attributes), options, len(data.get("uncategorized") or []))]
+    if concept == "collections":
+        return ["  collections: %d collections, %d products in a collection" % (
+            len(data.get("collections") or []), len(data.get("membership") or {}))]
+    if concept == "metafields":
+        return ["  metafields:"] + metafield_rows(data)
+    if concept == "metaobjects":
+        return ["  metaobjects: %d definitions, %d entries, %d products referenced" % (
+            len(data.get("definitions") or []), len(data.get("entries") or []), len(data.get("values") or {}))]
+    countries = data.get("countries") or []
+    offers = sum(len(by_country) for by_sku in (data.get("offers") or {}).values() for by_country in by_sku.values())
+    pairs = sum(len(p["variants"]) for p in products) * len(countries)
+    return ["  prices: %d offers, %d variant-country pairs without price, countries %s" % (
+        offers, pairs - offers, ", ".join(c.get("code") or "?" for c in countries) or "none")]
+
+
+def concepts_section(files, products) -> List[str]:
+    if not files:
+        return ["Concepts: none"]
+    lines = ["Concepts:"]
+    for concept, data in files:
+        lines += concept_lines(concept, data, products)
+        if data.get("warnings"):
+            lines += indented(catalog.format_warnings(data["warnings"]), "    ")
+    return lines
+
+
 def report(directory: str) -> Tuple[str, int]:
     data = catalog.refresh(read_json(os.path.join(directory, "products.json")))
     state_path = os.path.join(directory, "state.json")
@@ -155,12 +237,15 @@ def report(directory: str) -> Tuple[str, int]:
         problems.append("  status_mode %r is not one of %s" % (mode, ", ".join(STATUS_MODES)))
     elif mode:
         problems += payload_errors(split_products(data, state)[0], state)
+    files = concept_files(directory)
+    problems += stale_decisions(files, decisions) + concept_blocking(files)
     variants = [v for p in data["products"] for v in p["variants"]]
     images = sum(len(p.get("images") or []) for p in data["products"])
 
     lines = ["Data language: %s" % (decisions.get("data_language") or "(missing)"),
              "Status: %s" % (decisions.get("status_mode") or "(missing)")]
     lines += to_create(data, state)
+    lines += concepts_section(files, data["products"])
     if blocking or problems:
         lines.append("Blocking:")
         if blocking:

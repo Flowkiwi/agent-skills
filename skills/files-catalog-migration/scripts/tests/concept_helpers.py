@@ -2,6 +2,7 @@
 import json
 import os
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -17,6 +18,7 @@ from demo_files import write_demo_csv, write_demo_xlsx  # noqa: E402
 
 FIXTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures")
 PRODUCTS_FIXTURE = os.path.join(FIXTURES, "mapping-products.json")
+SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
 
 
 def read_json(path):
@@ -26,6 +28,28 @@ def read_json(path):
 
 def fixture(name):
     return read_json(os.path.join(FIXTURES, name))
+
+
+def run(script, *args, check=True):
+    """Runs a skill script as the agent does (a subprocess, without -I)."""
+    result = subprocess.run([sys.executable, os.path.join(SCRIPTS, script)] + list(args),
+                            capture_output=True, text=True)
+    if check and result.returncode != 0:
+        raise AssertionError("%s %s failed (%d):\n%s%s" % (
+            script, " ".join(args), result.returncode, result.stdout, result.stderr))
+    return result
+
+
+def write_workspace(directory, mappings=()):
+    """The demo workspace: sources, mappings/products.json and the named fixture mappings (concepts)."""
+    os.makedirs(os.path.join(directory, "sources"))
+    os.makedirs(os.path.join(directory, "mappings"))
+    write_demo_xlsx(os.path.join(directory, "sources", "demo-catalogue.xlsx"))
+    write_demo_csv(os.path.join(directory, "sources", "demo-tarifs.csv"))
+    shutil.copy(PRODUCTS_FIXTURE, os.path.join(directory, "mappings", "products.json"))
+    for concept in mappings:
+        shutil.copy(os.path.join(FIXTURES, "mapping-%s.json" % concept),
+                    os.path.join(directory, "mappings", concept + ".json"))
 
 
 def fake_iri(key):
@@ -41,11 +65,7 @@ class ConceptTestCase(unittest.TestCase):
         tmp = tempfile.TemporaryDirectory()
         cls.addClassCleanup(tmp.cleanup)
         cls.dir = tmp.name
-        os.makedirs(os.path.join(cls.dir, "sources"))
-        os.makedirs(os.path.join(cls.dir, "mappings"))
-        write_demo_xlsx(os.path.join(cls.dir, "sources", "demo-catalogue.xlsx"))
-        write_demo_csv(os.path.join(cls.dir, "sources", "demo-tarifs.csv"))
-        shutil.copy(PRODUCTS_FIXTURE, os.path.join(cls.dir, "mappings", "products.json"))
+        write_workspace(cls.dir)
         extract.main_products(cls.dir)
 
     def products(self):

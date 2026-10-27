@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract a concept from the source files with its mapping (see references/mapping.md).
 
-Usage: extract.py <dir> products|taxonomy|collections|metafields|metaobjects|prices
+Usage: extract.py <dir> products|taxonomy|collections|metafields|metaobjects|prices|all
 
 products: reads mappings/products.json, mappings/cleaning.json, fixes.json, state.json and the previous
 products.json when present; writes products.json (always regenerated from the source files) and
@@ -22,6 +22,9 @@ concepts/metaobjects.json and prints the definitions with their entry and produc
 prices: the same with mappings/prices.json (prices from the variants of products.json, or from the price specs
 of a country evaluated on the row of each variant); writes concepts/prices.json and prints the offers per
 country with examples.
+
+all: products, then every concept that has a mappings/<concept>.json, in the order above; stops at the first
+error. Prices are keyed by SKU: run it again (or extract.py <dir> prices) after codes.py fill.
 """
 import json
 import os
@@ -557,9 +560,22 @@ def main(argv: List[str]) -> int:
         print(__doc__.strip(), file=sys.stderr)
         return 2
     directory, concept = argv[1], argv[2]
-    if concept not in CONCEPTS:
-        print("error: unknown concept '%s' (available: %s)" % (concept, ", ".join(CONCEPTS)), file=sys.stderr)
+    if concept not in CONCEPTS + ("all",):
+        print("error: unknown concept '%s' (available: %s, all)" % (concept, ", ".join(CONCEPTS)), file=sys.stderr)
         return 2
+    if concept != "all":
+        return run(directory, concept)
+    selected = ["products"] + [c for c in CONCEPT_MODULES
+                               if os.path.isfile(os.path.join(directory, "mappings", c + ".json"))]
+    for i, name in enumerate(selected):
+        print("%s== %s ==" % ("\n" if i else "", name))
+        code = run(directory, name)
+        if code:
+            return code
+    return 0
+
+
+def run(directory: str, concept: str) -> int:
     try:
         if concept != "products":
             print(CONCEPT_MODULES[concept].format_preview(main_concept(directory, concept)))

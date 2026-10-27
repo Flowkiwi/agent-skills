@@ -41,7 +41,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the Flowkiwi tools are missing at first, the MCP may still be connecting: wait a few seconds (`sleep 5`) and search the tools again once before concluding. Still missing or not connected: stop and say so.
 2. Ask the client slug. Workspace: `migrations/<client-slug>/` (layout in `references/state.md`).
-3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: not supported by this version yet, say so and offer the other choices). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
+3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu, then `references/create.md` `## Concept added after creation` when the products already exist), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: not supported by this version yet, say so and offer the other choices). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
 
 ## Phase 1 - Intake
 
@@ -53,11 +53,20 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 ## Phase 2 - Concepts
 
-Take the concepts in menu order. Announce the effort before each one and only load its reference then.
+Products always come first. Then offer the other concepts in menu order, one question at a time (one concept per question, with its effort), and never push one: "no" is a valid answer, and a concept can be added later (Start or resume, **add a concept**). Announce the effort before each concept and only load its reference then.
 
-| Concept                        | Brings                                         | Effort     | Reference                |
-| ------------------------------ | ---------------------------------------------- | ---------- | ------------------------ |
-| products and variants (always) | products, options, variants, SKUs and barcodes | ~30-60 min | `references/products.md` |
+| Concept           | Brings                                      | Effort     | Reference                   |
+| ----------------- | ------------------------------------------- | ---------- | --------------------------- |
+| products (always) | products, options, variants                 | ~30-60 min | `references/products.md`    |
+| taxonomy          | categories, attributes from columns         | ~20-40 min | `references/taxonomy.md`    |
+| collections       | collections and memberships                 | ~10 min    | `references/collections.md` |
+| metafields        | metafield definitions and values            | ~15 min    | `references/metafields.md`  |
+| metaobjects       | "cms" entries (brand...) linked to products | ~10 min    | `references/metaobjects.md` |
+| prices            | selling prices per country (TTC or HT)      | ~5-10 min  | `references/prices.md`      |
+
+- **Column triage**, once, before taxonomy and metafields: `$S/columns.py propose <dir>` and show its table (every column of the mapped sources with a role: `core`, `attribute`, `metafield`, `description` or `ignore`, a type and the reason), so one validation covers attributes, metafields, descriptions and ignored columns. Each concept then starts from the rows of its role.
+- **Prices last**: offers are keyed by SKU, so the prices are extracted after `codes.py fill` (a products step); extract them again whenever `products.json` changes.
+- **After a products change** (new mapping, fixes, new file): `$S/extract.py <dir> all` extracts the products, then every concept with a `mappings/<concept>.json`, in menu order. Record each changed concept again (`state.py decide`): the dry-run blocks while a `concepts/<concept>.json` differs from its decision.
 
 Per concept:
 
@@ -67,7 +76,7 @@ Per concept:
 4. **Extract**: `$S/extract.py <dir> <concept>`. It prints the counts, the cleaning counts and the warnings grouped by code. Exit 1 is a mapping error naming the field: fix the mapping and run it again.
 5. **State**, after the first extract only: `$S/state.py init <dir> --client <slug> --mcp-url <url>`. Then the **data language**: compare the detected language with the tenant default locale and ask the developer to confirm (they differ: ask which one wins), then `$S/state.py decide <dir> --key data_language --value-json '"fr"' --origin developer`. From now on, every name you propose (option labels, marker labels, later categories and attributes) is written in that language, and the dry-run lists them for review. For a language `plan_shared.py` does not know (en, fr, de, es, it), also record `marker_labels` (`{"name": "...", "description": "..."}`) in that language. Then the **cleaning** answer of Phase 1: `$S/state.py decide <dir> --key cleaning --value-file <dir>/mappings/cleaning.json --origin developer` (`--value-json '{}'` when the rules are kept as they are). Later, after any extract that adds or drops products: `$S/state.py sync <dir>`.
 6. **Warnings**: settle them as the reference `## Warnings` says, by changing the mapping or adding a `fixes.json` entry (format in `references/state.md`), then extract again. `extract.py` always rebuilds `products.json` from the source files, replaying `fixes.json` and keeping the codes generated earlier: never edit `products.json`.
-7. Run the remaining steps of the reference (products: status, descriptions, codes, tenant collisions).
+7. Run the remaining steps of the reference (products: status, descriptions, codes, tenant collisions; other concepts: their `## Record` steps, ending with `$S/state.py decide <dir> --key <concept> --value-file <dir>/concepts/<concept>.json`).
 
 ## Phase 3 - Create
 
