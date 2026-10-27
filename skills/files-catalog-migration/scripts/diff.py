@@ -15,11 +15,14 @@ diff.json:
   unchanged         count of those with no difference
   removed           created handles gone from products.json (archive or delete: decision removed_action)
   already_archived  archived handles still gone (selected again only when removed_action is delete)
-  rekeyed           [{"removed", "new": [handles], "skus": [skus]}]: a removed handle whose written SKUs are now
-                    held by new handles (a grouping change)
+  rekeyed           [{"removed", "new": [handles], "skus": [skus], "changed"?: [handles]}]: a removed (or already
+                    archived) handle whose written SKUs are now held by other products (a grouping change):
+                    new handles, and in `changed` the created ones that gain those SKUs (variants.added)
   removal           {"<removed or already archived handle>": "delete_rekeyed" | "removed_action"}: a rekeyed
                     handle is always deleted, only after decision confirmed_rekey of the phase and before the
                     creation of its new handles; the others follow decision removed_action
+  moved             [{"sku", "from", "to": [handles]}]: a SKU leaving a product still in products.json for
+                    another one; the variant of `from` must be deleted before the creation in `to`
   unmanaged         changed or removed handles whose product item is reused: never updated, archived or deleted
   unmanaged_items   {"<handle>": [paths]}: changes touching a reused item of the product, left out of `changed`
   no_written        created handles without a written snapshot: cannot be compared
@@ -53,10 +56,25 @@ def _field(body, name):
     return value
 
 
-def _same(name, old, new):
+def _iri(value):
+    return value["@id"] if isinstance(value, dict) and "@id" in value else value
+
+
+def _view(name, value):
+    """Normalized product field, shared by every comparison: our own writes read back compare equal."""
+    value = _iri(value)
     if name == "description":
-        return verify.normalize(old) == verify.normalize(new)
-    return old == new
+        return verify.normalize(value)
+    if name == "tags":
+        tags = value.split(",") if isinstance(value, str) else (value or [])
+        return sorted(t.strip() for t in tags if t and t.strip())
+    if name == "attributes":
+        pairs = [(_iri(a.get("definition")), _iri(a["option"]) if "option" in a else a.get("value"))
+                 for a in value or []]
+        return sorted(pairs, key=lambda pair: json.dumps(pair, sort_keys=True, ensure_ascii=False))
+    if name == "collections":
+        return sorted(_iri(c) for c in value or [])
+    return value
 
 
 def _product_changes(old, new):
@@ -64,9 +82,8 @@ def _product_changes(old, new):
     new_body = (new.get("product") or {}).get("body") or {}
     changes = {}
     for name in PRODUCT_FIELDS:
-        before, after = _field(old_body, name), _field(new_body, name)
-        if not _same(name, before, after):
-            changes[name] = [before, after]
+        if _view(name, old_body.get(name)) != _view(name, new_body.get(name)):
+            changes[name] = [_field(old_body, name), _field(new_body, name)]
     return changes
 
 
@@ -207,7 +224,7 @@ def diff(state_data, products):
     entries = state_data.get("products", {})
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
-              "no_written": [], "errors": {}, "conflicts": {}, "missing_snapshots": []}
+              "moved": [], "no_written": [], "errors": {}, "conflicts": {}, "missing_snapshots": []}
 
     for handle in present:
         product = entries.get(handle)
@@ -248,20 +265,32 @@ def diff(state_data, products):
         result["removed" if product["status"] == "created" else "already_archived"].append(handle)
         gone.append(handle)
 
-    holders = {}
+    # SKUs a present product holds now and did not hold when written (every SKU of a new handle)
+    holders, departures = {}, []
     for p in products["products"]:
-        if p["handle"] in result["new"]:
-            for v in p.get("variants") or []:
-                holders.setdefault(v["sku"], []).append(p["handle"])
+        product = entries.get(p["handle"])
+        if product and product["status"] == "deleted":
+            continue
+        before = _written_skus(product) if product and product["status"] in LIVE else []
+        now = [v["sku"] for v in p.get("variants") or []]
+        for sku in now:
+            if sku not in before:
+                holders.setdefault(sku, []).append(p["handle"])
+        departures += [(p["handle"], sku) for sku in before if sku not in now]
     for handle in gone:
         skus = [s for s in _written_skus(entries[handle]) if s in holders]
         if skus:
             held = {h for s in skus for h in holders[s]}
-            result["rekeyed"].append({"removed": handle, "new": [h for h in result["new"] if h in held],
-                                      "skus": skus})
+            entry = {"removed": handle, "new": [h for h in result["new"] if h in held], "skus": skus}
+            changed = [h for h in present if h in held and h not in result["new"]]
+            if changed:
+                entry["changed"] = changed
+            result["rekeyed"].append(entry)
             result["removal"][handle] = "delete_rekeyed"
         else:
             result["removal"][handle] = "removed_action"
+    result["moved"] = [{"sku": sku, "from": handle, "to": holders[sku]}
+                       for handle, sku in departures if sku in holders]
     return result
 
 
@@ -286,7 +315,10 @@ def report(result):
     ]
     lines += [f"  {handle}: {', '.join(change_paths(change))}" for handle, change in result["changed"].items()]
     for entry in result["rekeyed"]:
-        lines.append(f"rekeyed {entry['removed']} -> {', '.join(entry['new'])} (SKU {', '.join(entry['skus'])})")
+        targets = entry["new"] + entry.get("changed", [])
+        lines.append(f"rekeyed {entry['removed']} -> {', '.join(targets)} (SKU {', '.join(entry['skus'])})")
+    for entry in result["moved"]:
+        lines.append(f"moved SKU {entry['sku']}: {entry['from']} -> {', '.join(entry['to'])}")
     if result["unmanaged"]:
         lines.append(f"unmanaged (reused, never written): {', '.join(result['unmanaged'])}")
     for handle, paths in result["unmanaged_items"].items():

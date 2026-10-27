@@ -84,6 +84,59 @@ class DiffTest(unittest.TestCase):
         self.assertEqual(d["unmanaged_items"], {"2230": ["variants.changed.1006.barcode"]})
         self.assertEqual(d["unmanaged"], [])
 
+    def test_regrouping_into_existing_product_is_rekeyed(self):
+        single, duo = self.products["products"]
+        single["variants"] += duo["variants"]
+        self.products["products"] = [single]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(d["removed"], ["2230"])
+        self.assertEqual(d["rekeyed"], [{"removed": "2230", "new": [], "skus": ["1005", "1006"], "changed": ["2226"]}])
+        self.assertEqual(d["removal"], {"2230": "delete_rekeyed"})
+        self.assertEqual(d["changed"]["2226"]["variants"], {"added": ["1005", "1006"]})
+
+    def test_sku_moving_between_present_products(self):
+        single, duo = self.products["products"]
+        single["variants"].append(duo["variants"].pop())
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["removed"], d["rekeyed"]), ([], []))
+        self.assertEqual(d["moved"], [{"sku": "1006", "from": "2230", "to": ["2226"]}])
+
+    def test_sku_moving_to_a_new_product(self):
+        duo = self.products["products"][1]
+        moved = duo["variants"].pop()
+        self.products["products"].append(dict(duo, handle="1006", key="1006", variants=[moved], options=[]))
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["new"], d["moved"]), (["1006"], [{"sku": "1006", "from": "2230", "to": ["1006"]}]))
+
+    def test_archived_handle_regrouped_is_rekeyed(self):
+        gone = {"products": self.products["products"][:1]}
+        state.sync_products(self.st, gone)
+        state.merge(self.st, [dict(created_line("2230"), status="archived", items=[])], gone)
+        duo = self.products["products"][1]
+        regrouped = {"products": gone["products"] + [dict(duo, handle="1005", key="1005", variants=duo["variants"][:1],
+                                                          options=[])]}
+        d = diff.diff(self.st, regrouped)
+        self.assertEqual((d["removed"], d["already_archived"]), ([], ["2230"]))
+        self.assertEqual(d["rekeyed"], [{"removed": "2230", "new": ["1005"], "skus": ["1005"]}])
+        self.assertEqual(d["removal"], {"2230": "delete_rekeyed"})
+
+    def test_payload_error_is_reported(self):
+        self.products["products"][1]["variants"][0]["option_values"] = [None]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(list(d["errors"]), ["2230"])
+        self.assertIn("missing_option_value", d["errors"]["2230"])
+        self.assertEqual((list(d["changed"]), d["unchanged"]), ([], 1))
+
+    def test_no_written_snapshot_is_not_compared(self):
+        del self.st["products"]["2226"]["written"]
+        self.products["products"][0]["title"] = "X"
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["no_written"], list(d["changed"]), d["unchanged"]), (["2226"], [], 1))
+
+    def test_tag_order_is_not_a_change(self):
+        self.products["products"][0]["tags"] = ["petit-electromenager", " cuisine"]
+        self.assertEqual(diff.diff(self.st, self.products)["unchanged"], 2)
+
     def test_new_handle_and_paths(self):
         extra = dict(self.products["products"][0], handle="2240", key="2240",
                      variants=[{"sku": "1010", "barcode": "3601234560104", "option_values": []}])
@@ -173,6 +226,18 @@ class DiffCliTest(unittest.TestCase):
             self.assertIn("2226: product.title", result.stdout)
             written = read_json(os.path.join(directory, "diff.json"))
         self.assertEqual((list(written["changed"]), written["unchanged"]), (["2226"], 1))
+
+    def test_payload_error_exits_1_and_still_writes(self):
+        products = make_products()
+        st = make_state(products)
+        state.merge(st, [created_line("2226"), created_line("2230")], products)
+        products["products"][1]["variants"][0]["option_values"] = [None]
+        with tempfile.TemporaryDirectory() as directory:
+            write_workspace(directory, products, st)
+            result = run_cli(directory, script="diff.py")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("error: 2230:", result.stdout)
+            self.assertEqual(list(read_json(os.path.join(directory, "diff.json"))["errors"]), ["2230"])
 
     def test_usage_error(self):
         result = run_cli(script="diff.py")
