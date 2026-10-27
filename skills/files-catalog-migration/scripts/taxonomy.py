@@ -16,7 +16,13 @@ MIN_NAME_LENGTH = 3
 SOURCE = "mappings/taxonomy.json"
 DEFAULT_STATUS = "/api/statuses/ACTIVE"
 CATEGORY_KEYS = frozenset(("value", "separator", "drop_levels", "depth", "map", "rename", "assign", "status"))
+ATTRIBUTE_KEYS = frozenset(("code", "name", "type", "multiple", "value"))
+ATTRIBUTE_TYPES = ("list", "string")
+SLUG = re.compile(r"^[a-z0-9]+([-_][a-z0-9]+)*$")
+MAX_STRING_LENGTH = 255
+DROPPED_HANDLES = 5
 PREVIEW_HANDLES = 10
+LIGATURES = {"\u0153": "oe", "\u0152": "OE", "\u00e6": "ae", "\u00c6": "AE"}
 
 
 def split_path(value):
@@ -24,9 +30,10 @@ def split_path(value):
 
 
 def attribute_code(key):
-    text = unicodedata.normalize("NFKD", key)
+    text = "".join(LIGATURES.get(c, c) for c in key)
+    text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
-    return re.sub(r"[^a-z0-9_-]+", "-", text.strip().lower()).strip("-")[:64]
+    return re.sub(r"[^a-z0-9_-]+", "-", text.strip().lower()).strip("-")[:64].strip("-_")
 
 
 def _common_ancestor(paths):
@@ -124,11 +131,41 @@ def check_mapping(m: dict) -> dict:
     status = c.get("status", DEFAULT_STATUS)
     if not isinstance(status, str) or not status.startswith("/api/statuses/"):
         raise MappingError("categories.status: a status IRI such as %s" % DEFAULT_STATUS)
-    if not isinstance(m.get("attributes", []), list):
+    attributes = m.get("attributes", [])
+    if not isinstance(attributes, list):
         raise MappingError("attributes: a list")
+    codes = []  # type: List[str]
+    for i, entry in enumerate(attributes):
+        codes.append(check_attribute(entry, "attributes[%d]" % i, codes))
     specs = {k: v for k, v in c.items() if k == "value" or k in mapping.DOC_KEYS}
-    return {"version": m.get("version"), "concept": "taxonomy", "categories": specs,
-            "attributes": m.get("attributes", [])}
+    attribute_specs = [{k: v for k, v in a.items() if k == "value" or k in mapping.DOC_KEYS} for a in attributes]
+    return {"version": m.get("version"), "concept": "taxonomy", "categories": specs, "attributes": attribute_specs}
+
+
+def check_attribute(entry, where: str, codes: List[str]) -> str:
+    """Checks an attribute entry and returns its code (given, or derived from its name)."""
+    if not isinstance(entry, dict):
+        raise MappingError("%s: an object with name, type, value (and code, multiple)" % where)
+    unknown = sorted(set(entry) - ATTRIBUTE_KEYS - mapping.DOC_KEYS)
+    if unknown:
+        raise MappingError("%s: unknown key(s) %s (valid: %s)" % (
+            where, ", ".join(unknown), ", ".join(sorted(ATTRIBUTE_KEYS | mapping.DOC_KEYS))))
+    name = entry.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise MappingError("%s.name: a non-empty string (the attribute name in the data language)" % where)
+    if entry.get("type") not in ATTRIBUTE_TYPES:
+        raise MappingError("%s.type: one of %s" % (where, ", ".join(ATTRIBUTE_TYPES)))
+    if not isinstance(entry.get("multiple", False), bool):
+        raise MappingError("%s.multiple: true or false" % where)
+    if not is_spec(entry.get("value")):
+        raise MappingError("%s.value: a field spec ({\"from\": [...]})" % where)
+    code = entry.get("code", attribute_code(name))
+    if not isinstance(code, str) or not 2 <= len(code) <= 64 or not SLUG.match(code):
+        raise MappingError("%s.code: %r must be 2-64 characters, lowercase letters, digits, - or _ (give a code)" % (
+            where, code))
+    if code in codes:
+        raise MappingError("%s.code: '%s' is already the code of another attribute" % (where, code))
+    return code
 
 
 def _final(cleaner, path):
@@ -160,6 +197,72 @@ def column_path(handle, rows, c, path_map, renames, sources, warnings, cleaner):
     return kept
 
 
+def _flat(value) -> List:
+    return [v for v in (value if isinstance(value, list) else [value]) if v is not None and v != ""]
+
+
+def attribute_values(spec, handle, rows, field, sources, warnings, cleaner) -> List[Tuple[str, Optional[str]]]:
+    """(value, source) of a product: distinct non-empty values over its rows in row order, with the cleaned
+    cell before map and transform they come from (None for a default)."""
+    bare = {k: v for k, v in spec.items() if k not in ("map", "transform", "default")}
+    found = []  # type: List[Tuple[str, Optional[str]]]
+    for row in rows:
+        values = [cleaner.final(str(v)) for v in _flat(evaluate(spec, row, sources, warnings, field, handle))]
+        values = [v for v in values if v]
+        cells = [str(v) for v in _flat(evaluate(bare, row, sources, [], field, handle))]
+        for i, value in enumerate(values):
+            if len(cells) == len(values):
+                source = cells[i]
+            else:
+                source = ", ".join(cells) or None
+            if value not in [v for v, _ in found]:
+                found.append((value, source))
+    return found
+
+
+def build_attribute(entry, products, rows, assignments, sources, warnings, cleaner) -> dict:
+    code = entry.get("code", attribute_code(entry["name"]))
+    kind = entry["type"]
+    multiple = entry.get("multiple", False)
+    field = "attributes." + code
+    options, values, dropped = [], {}, []  # type: List[dict], Dict[str, List[str]], List[str]
+    for product in products:
+        handle = product["handle"]
+        found = attribute_values(entry["value"], handle, rows.get(handle, []), field, sources, warnings, cleaner)
+        if not found:
+            continue
+        if handle not in assignments:
+            dropped.append(handle)
+            continue
+        if len(found) > 1 and not multiple:
+            warn(warnings, None, handle, "multiple_values", field,
+                 "%d values %r for a single-value attribute (first one kept): map them to one value or set "
+                 "multiple" % (len(found), [v for v, _ in found]))
+            found = found[:1]
+        for value, source in found:
+            if kind == "string" and len(value) > MAX_STRING_LENGTH:
+                warn(warnings, None, handle, "too_long", field, "value of %d characters (over %d), kept whole" % (
+                    len(value), MAX_STRING_LENGTH))
+            if kind == "list" and value not in [o["value"] for o in options]:
+                same = next((o["value"] for o in options if o["value"].casefold() == value.casefold()), None)
+                if same is not None:
+                    warn(warnings, None, handle, "option_case", field,
+                         "options %r and %r differ only by case: map them to one value" % (same, value))
+                options.append({"value": value, "source": source})
+        values[handle] = [v for v, _ in found]
+    if dropped:
+        warn(warnings, None, None, "uncategorized_values", field,
+             "attribute '%s': %d products without category lose their value (%s%s)" % (
+                 code, len(dropped), ", ".join(dropped[:DROPPED_HANDLES]),
+                 ", ..." if len(dropped) > DROPPED_HANDLES else ""))
+    paths = sorted({assignments[h] for h in values})
+    if not values:
+        warn(warnings, None, None, "no_values", field,
+             "attribute '%s': no product with a category has a value, remove it or check its column" % code)
+    return {"code": code, "name": cleaner.final(entry["name"]), "type": kind, "multiple": multiple,
+            "categories": _common_ancestor(paths) if paths else [], "options": options, "values": values}
+
+
 def build(products: List[dict], rows: Dict[str, list], spec: dict, sources: dict, warnings: List[dict]) -> dict:
     """concepts/taxonomy.json from the products of products.json, their rows and the taxonomy mapping."""
     c = spec["categories"]
@@ -188,9 +291,11 @@ def build(products: List[dict], rows: Dict[str, list], spec: dict, sources: dict
                  "assign names %s, which is not a product of products.json" % handle)
     categories, tree_warnings = path_tree(assignments.values(), MIN_NAME_LENGTH, "short_category_name", "categories")
     warnings.extend(tree_warnings)
+    attributes = [build_attribute(entry, products, rows, assignments, sources, warnings, cleaner)
+                  for entry in spec.get("attributes") or []]
     return {
         "source": SOURCE, "category_status": c.get("status", DEFAULT_STATUS), "categories": categories,
-        "products": assignments, "attributes": [], "uncategorized": uncategorized, "warnings": warnings,
+        "products": assignments, "attributes": attributes, "uncategorized": uncategorized, "warnings": warnings,
     }
 
 

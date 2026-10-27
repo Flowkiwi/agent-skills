@@ -14,5 +14,7 @@
     "assign": {},
     "status": "/api/statuses/ACTIVE"
   },
-  "attributes": []
+  "attributes": [
+    {"name": "Matière", "type": "list", "value": {"from": ["main:matiere"], "map": {"inox": "Acier inoxydable"}, "map_ignore_case": true}}
+  ]
 }

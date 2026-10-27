@@ -18,7 +18,8 @@ The mapping has no `sources`: its columns are those of `mappings/products.json` 
                 "map": {"PEM > Grille-pain": "Petit électroménager > Grille-pain",
                         "PEM > Bouilloire": "Petit électroménager > Bouilloire"},
                 "rename": {}, "assign": {}, "status": "/api/statuses/ACTIVE"},
- "attributes": []}
+ "attributes": [{"name": "Matière", "type": "list",
+                 "value": {"from": ["main:matiere"], "map": {"inox": "Acier inoxydable"}, "map_ignore_case": true}}]}
 ```
 
 | Key           | Meaning                                                                                                     | Default                |
@@ -42,7 +43,29 @@ A product takes the category of its first row that gives one; a later row of the
 
 ## Attributes
 
-Not built yet by this concept: keep `"attributes": []`.
+Each entry of `attributes` turns one characteristic column into an attribute definition attached to the categories of the products that have a value.
+
+| Key        | Meaning                                                                                                  | Default                 |
+| ---------- | -------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `code`     | shared key of the definition, `^[a-z0-9]+([-_][a-z0-9]+)*$`, 2-64 characters; never renamed once created | from `name` (`matiere`) |
+| `name`     | attribute name in the data language                                                                      | required                |
+| `type`     | `list` (values are options) or `string` (free text, up to 255 characters)                                | required                |
+| `multiple` | `true`: a product keeps every value of its rows; `false`: one value                                      | `false`                 |
+| `value`    | field spec of the column (`map` for spelling variants, `transform` such as `boolean`)                    | required                |
+| `origin`   | `developer`, `agent` or `client`, with its `reason` in the data language                                 | -                       |
+
+A product's values are the distinct non-empty results of `value` over its rows, in row order. An empty cell gives no value (never `Non`). Options of a `list` definition are its distinct values in order of first appearance, each with the cleaned cell it comes from (`source`, shown as `Acier inoxydable (from Inox)` in the preview). The definition is attached to the lowest common ancestor of the categories of its products (or to each root when they share none). Products without category lose their values (`uncategorized_values`).
+
+1. **Candidates**: the rows of `$S/columns.py propose <dir>` with role `attribute` (its type `list` or `string`), and the `value_variants` flags of those columns in `inventory.json` (`Inox`, `inox`).
+2. **One table**: show every candidate in one table and ask once for the whole table, not column by column:
+
+| Column                                  | Proposed name | Type   | Options | Spelling variants and proposed `map` or `transform`                |
+| --------------------------------------- | ------------- | ------ | ------- | ------------------------------------------------------------------ |
+| K `[Caractéristiques] Matière du corps` | Matière       | `list` | 2       | `Inox` / `inox`: `{"inox": "Acier inoxydable"}`, `map_ignore_case` |
+| L `[Fonctions] Décongélation`           | Décongélation | `list` | 2       | `OUI` / `NON` / `non`: `{"boolean": ["Oui", "Non"]}`               |
+
+3. **Client values**: options keep the client's values; only spelling variants are mapped to one of them (`map` with `map_ignore_case`, whole value to whole value). Yes/no columns use the `boolean` transform: exactly two options. The name and the option labels you write are in the data language.
+4. **Extract again** and read the `Attributes:` lines of the preview: each definition with its product count, its categories and its options. Case-only variants left (`option_case`) mean two options: map them before recording.
 
 ## Record
 
@@ -55,10 +78,16 @@ Not built yet by this concept: keep `"attributes": []`.
 | `unknown_handle`       | `assign` names a handle that is not in `products.json`: fix the handle or remove the entry     |
 | `group_conflict`       | the rows of one product give different categories, the first wins: check it with the developer |
 | `list_in_single_field` | the category spec gives several values (`pick: all`, `split`): give it a single value          |
+| `option_case`          | two options differ only by case (`Inox`, `inox`): map them to one value in the attribute `map` |
+| `multiple_values`      | a product has several values for a single-value attribute, the first wins: `map` or `multiple` |
+| `too_long`             | a `string` value over 255 characters, kept whole: shorten it or make it a metafield            |
+| `uncategorized_values` | products without category lose their attribute values: give them a category or accept it       |
+| `no_values`            | no product with a category has a value: remove the attribute or check its column               |
+| `not_a_boolean`        | a cell of a `boolean` column is neither yes nor no: `map` it to a yes or no value              |
 
 3. `$S/state.py decide <dir> --key taxonomy --value-file <dir>/concepts/taxonomy.json --origin developer`.
 
-`concepts/taxonomy.json`: `{"source": "mappings/taxonomy.json", "category_status": "<iri>", "categories": [{"path": "A > B", "name": "B", "parent": "A"}], "products": {"<handle>": "A > B"}, "attributes": [...], "uncategorized": ["<handle>"], "warnings": [...]}`, categories sorted by path, parents first. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/taxonomy.json`: `{"source": "mappings/taxonomy.json", "category_status": "<iri>", "categories": [{"path": "A > B", "name": "B", "parent": "A"}], "products": {"<handle>": "A > B"}, "attributes": [{"code", "name", "type", "multiple", "categories": ["A"], "options": [{"value", "source"}], "values": {"<handle>": ["<value>"]}}], "uncategorized": ["<handle>"], "warnings": [...]}`, categories sorted by path, parents first. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 
