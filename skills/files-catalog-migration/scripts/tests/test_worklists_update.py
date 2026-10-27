@@ -237,6 +237,50 @@ class UpdatePassesTest(unittest.TestCase):
         state.merge(self.st, [updated_line("2226")], self.products)
         self.assertEqual(self.lists(), [])
 
+    def move_1006_to_2226(self):
+        moved = product(self.products, "2230")["variants"].pop()
+        product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))
+
+    def test_move_from_an_unmanaged_product_is_skipped_not_retried(self):
+        self.st["products"]["2230"]["items"][0]["status"] = "reused"
+        self.move_1006_to_2226()
+        product(self.products, "2226")["title"] = "Grille-pain Toastine"
+        self.diff = diff.diff(self.st, self.products)
+        self.assertEqual((self.diff["unmanaged"], self.diff["moved"]),
+                         (["2230"], [{"sku": "1006", "from": "2230", "to": ["2226"]}]))
+        for _ in range(2):
+            report = {}
+            self.assertEqual(self.lists(report), [])
+            self.assertIn("SKU 1006 held by unmanaged 2230", report["skipped"]["2226"])
+
+    def test_move_from_a_reused_variant_is_skipped(self):
+        self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
+        self.move_1006_to_2226()
+        self.diff = diff.diff(self.st, self.products)
+        report = {}
+        self.assertEqual(self.lists(report), [])
+        self.assertIn("SKU 1006 held by 2230 as a reused variant", report["skipped"]["2226"])
+
+    def test_already_archived_rekeyed_product_is_deleted_first(self):
+        duo = product(self.products, "2230")
+        gone = {"products": [product(self.products, "2226")], "warnings": []}
+        state.sync_products(self.st, gone)
+        state.merge(self.st, [dict(created_line("2230"), status="archived", items=[])], gone)
+        state.start_phase(self.st)
+        self.products["products"] = [product(self.products, "2226")] + [
+            dict(duo, key=v["sku"], handle=v["sku"], variants=[dict(v, option_values=[])], options=[])
+            for v in duo["variants"]]
+        state.sync_products(self.st, self.products)
+        self.diff = diff.diff(self.st, self.products)
+        self.assertEqual((self.diff["already_archived"], self.diff["removal"]), (["2230"], {"2230": "delete_rekeyed"}))
+        with self.assertRaisesRegex(ValueError, "confirmed_rekey for phase 3"):
+            self.lists()
+        state.decide(self.st, "confirmed_rekey", {"phase": 3}, "developer")
+        report = {}
+        self.assertEqual((self.lists(report), report["pass"]), ([["2230"]], "deletions"))
+        state.mark_deleted(self.st, [s["iri"] for s in state.undo_plan(self.st, "product:2230")])
+        self.assertEqual(self.lists(), [])
+
     def test_creations_wait_for_the_sku_holder(self):
         duo = product(self.products, "2230")
         self.products["products"] = [product(self.products, "2226")] + [

@@ -277,7 +277,8 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
     created), else ("updates", handles): the changed handles, then the removed ones. Also returns the handles
     whose action is a deletion. Never selected (in `skipped` with the reason): unmanaged handles, unforced
     conflicts, a deletion whose receiver has an unforced conflict, a failed update without retry_failed, a
-    product waiting for a SKU still held by another one; handles already done in this phase are left out."""
+    product waiting for a SKU still held by another one, a product receiving a SKU this migration never deletes
+    (moved from an unmanaged product or a reused variant); handles already done in this phase are left out."""
     import payload  # function-level: payload imports state
 
     phase = state.get("phase", 1)
@@ -318,13 +319,27 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
         return bool(stuck)
 
     first, updates, deletes = [], [], set()
-    moved = {}
+    moved, never_given = {}, {}
     for entry in diff_data.get("moved") or []:
         moved.setdefault(entry["from"], []).append(entry)
+        giver = entries.get(entry["from"])
+        if entry["from"] in unmanaged:
+            why = f"unmanaged {entry['from']}"
+        elif giver and any(i["kind"] == "variant" and i.get("ref") == entry["sku"] and i.get("status") == "reused"
+                           for i in giver["items"]):
+            why = f"{entry['from']} as a reused variant"
+        else:
+            continue
+        for receiver in entry.get("to") or []:
+            never_given.setdefault(receiver, []).append((entry["sku"], why))
     for handle, change in changed.items():
         if not eligible(handle):
             continue
         product = entries[handle]
+        stuck = [f"SKU {sku} held by {why}" for sku, why in never_given.get(handle, [])]
+        if stuck:
+            skipped[handle] = f"receives {', '.join(stuck)}: never deleted by this migration, the SKU cannot move"
+            continue
         giving = [m for m in moved.get(handle, []) if _gives_away(product, [m["sku"]])]
         if giving:
             if not receivers_conflicted(handle, [r for m in giving for r in m.get("to") or []]):
