@@ -41,7 +41,9 @@ Check the MCP first (`list_locales`, `list_channels`, `list_countries`), ask the
 
 ## Phase 1 - Intake
 
-Copy the client files into the workspace without touching the originals, then inventory their sheets and columns.
+Work inside the workspace. `$S` = `python3 $SKILL/scripts`.
+
+Copy the client files into the workspace without touching the originals, with `$S/intake.py add <dir> <path>...` (exit codes and conversion of old `.xls` files in `references/sources.md`), then inventory their sheets and columns.
 
 ## Phase 2 - Concepts
 
