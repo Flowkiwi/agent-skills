@@ -17,16 +17,16 @@ DEMO_CODES = [
 DEMO_ROWS = [  # sheet rows 3 to 9, columns A to R
     [("n", "1001"), "2226", ("n", "3601234560012"), "Grille-pain 2 fentes Inox 1400W | TOASTINE",
      "<p>Grille-pain 2 fentes.<br/>Matière : Inox.</p>", "TOASTINE", "1,8", ("n", "1.8"), ("n", "2.1"),
-     "Le grille-pain 2 fentes, d’une puissance de 1400 W…", "Inox", "OUI", "argenté",
+     "Le grille-pain 2 fentes, d\u2019une puissance de 1400 W\u2026", "Inox", "OUI", "argenté",
      "Catalogue/PEM/Grille-pain", "https://example.com/img/1001.jpg", "39,90", None, ("date", 45000)],
-    [("n", "1002"), "2227", ("n", "3601234560029"), "Grille-pain 4 fentes « Stop Eject »", None,
+    [("n", "1002"), "2227", ("n", "3601234560029"), "Grille-pain 4 fentes \u00ab\u00a0Stop Eject\u00a0\u00bb", None,
      "Toastine", "2,4", ("n", "2.6000000000000001"), ("n", "1964"), "Voir notice", "Acier inoxydable", "non",
      "Noir", "Catalogue/PEM/Grille-pain", None, "59.90", None, ("date", 45366)],
-    [None, "2228", None, "Grille-pain  vintage crème ", "Grille-pain vintage crème",
-     "L’Atelier Pain", "1,5", None, ("n", "2"), None, "inox ", "NON", "Crème", "Catalogue/PEM/Grille-pain",
+    [None, "2228", None, "Grille-pain  vintage\u00a0crème ", "Grille-pain vintage crème",
+     "L\u2019Atelier Pain", "1,5", None, ("n", "2"), None, "inox ", "NON", "Crème", "Catalogue/PEM/Grille-pain",
      None, "45", None, None],
-    [("n", "1004"), None, ("n", "3601234560043"), "Bouilloire 1,7 L — sans fil",
-     "<p>Bouilloire sans fil​ 1,7 L.</p>", "Brioche & Co", "1,1", ("n", "1.1"), ("n", "1.4"),
+    [("n", "1004"), None, ("n", "3601234560043"), "Bouilloire 1,7 L \u2014 sans fil",
+     "<p>Bouilloire sans fil\u200b 1,7 L.</p>", "Brioche & Co", "1,1", ("n", "1.1"), ("n", "1.4"),
      "https://example.com/notice/1004.pdf", "Plastique", None, "Blanc", "Catalogue/PEM/Bouilloire",
      "https://example.com/img/1004.jpg", "29,90", None, None],
     [None, None, None, "Toaster sans référence", None, "TOASTINE", None, None, None, None, "Inox", "OUI",
@@ -99,8 +99,6 @@ def sheet_xml(sheet, strings):
     no_refs = set(sheet.get("no_refs_rows", []))
     rows = []
     for number, row in enumerate(sheet["rows"], 1):
-        if all(value is None for value in row):
-            continue
         if number in no_refs:
             rows.append("<row>%s</row>" % "".join(cell_xml(value, None, strings) for value in row))
         else:

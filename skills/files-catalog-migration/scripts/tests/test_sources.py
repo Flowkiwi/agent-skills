@@ -93,6 +93,13 @@ class XlsxEdgeTest(TmpDirTest):
         self.assertEqual(hidden.name, "Caché")
         self.assertEqual(hidden.rows, [["x", None, "z"], [None, None, None], [None, "0.1", None]])
 
+    def test_empty_row_before_row_without_r(self):
+        demo_files.write_xlsx(self.other, [{"name": "S", "rows": [["a"], [], ["b"]], "no_refs_rows": [3]},
+                                           {"name": "T", "rows": [["a"], [None], [], ["b"]], "no_refs_rows": [2, 4]}])
+        first, second = sources.read_xlsx(self.other)
+        self.assertEqual(first.rows, [["a"], [None], ["b"]])
+        self.assertEqual(second.rows, [["a"], [None], [None], ["b"]])
+
     def test_strict_namespace_absolute_targets_and_rels_order(self):
         workbook = (
             '<workbook xmlns="%s" xmlns:r="%s"><workbookPr date1904="true"/><sheets>'
