@@ -743,7 +743,7 @@ def merge(state, lines, products=None):
     it adds items and records a per-module error, without touching the product status.
     An item tied to a recorded shared element takes that element's module (a reference metafield: metaobjects).
     `updated` keeps the product created (updated_phase), `archived` archives it, a failed line on a product
-    already created or archived (an update run) only records the error. `deleted` IRIs mark those items deleted.
+    already created or archived (an update run) only records the error and its phase (error_phase). `deleted` IRIs mark those items deleted.
     With `products` (products.json), every non-failed line records the `written` snapshot of the product."""
     for line in lines:
         for item in line["items"]:
@@ -766,6 +766,10 @@ def merge(state, lines, products=None):
                 product["status"] = line["status"]
             product["iri"] = line["iri"] or product["iri"]
             product["error"] = line["error"]
+            if line["status"] == "failed" and live:
+                product["error_phase"] = state.get("phase", 1)
+            else:
+                product.pop("error_phase", None)
         if line.get("verify"):
             product["verify"] = line["verify"]
         known = {i["iri"]: i for i in product["items"]}
@@ -879,6 +883,9 @@ def summary(state):
         counts = items.setdefault(key.split(":", 1)[0], {})
         counts[shared["status"]] = counts.get(shared["status"], 0) + 1
     failed = [{"handle": h, "error": p["error"]} for h, p in state["products"].items() if p["status"] == "failed"]
+    phase = state.get("phase", 1)
+    update_failed = [{"handle": h, "error": p["error"]} for h, p in state["products"].items()
+                     if p["status"] in ("created", "archived") and p.get("error") and p.get("error_phase") == phase]
     verify = {}
     for product in state["products"].values():
         if product.get("verify"):
@@ -889,7 +896,7 @@ def summary(state):
         if meta.get("origin") in decisions:
             decisions[meta["origin"]] += 1
     removed = sum(1 for p in state["products"].values() if p.get("removed"))
-    return {"phase": state.get("phase", 1), "products": products, "items": items, "failed": failed,
+    return {"phase": phase, "products": products, "items": items, "failed": failed, "update_failed": update_failed,
             "verify": verify, "verify_mismatch": mismatch, "decisions": decisions, "removed": removed}
 
 

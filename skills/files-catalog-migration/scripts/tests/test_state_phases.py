@@ -245,6 +245,19 @@ class PhaseDetailsTest(unittest.TestCase):
         self.assertNotIn("removed", self.st["products"]["2230"])
         self.assertEqual(state.summary(self.st)["removed"], 1)
 
+    def test_failed_update_is_in_summary(self):
+        state.merge(self.st, [created_line("2226"), created_line("2230")], self.products)
+        state.start_phase(self.st)
+        failed = {"handle": "2230", "status": "failed", "iri": None, "error": "409 conflict", "items": []}
+        state.merge(self.st, [failed], self.products)
+        summary = state.summary(self.st)
+        self.assertEqual(summary["update_failed"], [{"handle": "2230", "error": "409 conflict"}])
+        self.assertEqual((summary["failed"], self.st["products"]["2230"]["status"]), ([], "created"))
+        state.start_phase(self.st)
+        self.assertEqual(state.summary(self.st)["update_failed"], [])
+        state.merge(self.st, [dict(failed, status="updated", iri=product_iri("2230"), error=None)], self.products)
+        self.assertNotIn("error_phase", self.st["products"]["2230"])
+
     def test_deleted_handle_is_never_flagged_removed(self):
         state.merge(self.st, [created_line("2226")], self.products)
         state.sync_products(self.st, self.without("2226"))
