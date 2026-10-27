@@ -24,6 +24,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 - **Check before create, check before retry.** Every creation is preceded by a lookup (state, then Flowkiwi). After any failed or timed-out write, look up before retrying. Never create a duplicate.
 - **Never modify tenant items you did not create**, except reusing them as-is (recorded `reused`) or adopting an orphan, a product of this migration created before its `import.key` marker was written.
 - **State after each step.** Shared elements go through `state.py shared`, products through worker result files merged with `state.py merge`. Never edit `state.json` by hand.
+- **Images are out of scope.** Never try to create media; image URLs stay in `products.json` and are listed in the final report.
 - **No bulk operation exists.** Do not search for one.
 - **One data language.** Every name or label the migration writes that does not come verbatim from the source files (categories, attribute definitions and options, metafield definition names and descriptions, the marker definition, collections, option labels...) is in the data language recorded in Phase 2 (`decisions.data_language`), never in English by default and never in the language of this conversation.
 - **Scripts compute, you propose.** Everything sent to Flowkiwi comes from a script output (`extract.py`, `payload.py`, `plan_shared.py`). Never clean, convert or retype a value yourself.
@@ -32,6 +33,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 - **Every decision has an origin** (`developer`, `agent`, `client`). A choice you make without the developer's answer is recorded `agent` with its reason, in the data language.
 - **No magic.** Never present a proposed value, category or description as a fact from the data.
 - **Half a day.** Group questions per concept, always with a default proposal; only ask about real ambiguities.
+- Only load a concept reference when that concept is being worked on.
 
 ## Start or resume
 
