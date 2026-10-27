@@ -182,7 +182,8 @@ $S/state.py merge <dir>                                              # also reco
 $S/state.py phase <dir> [--start]                                    # print the current phase, or start the next one
 $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>|product:<handle>
 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
-$S/state.py reset-deleted <dir>                                      # deleted products back to pending
+$S/state.py reset-deleted <dir>                                      # every deleted product back to pending, with no items
+$S/state.py reset-deleted <dir> --handle <handle>                    # only this deleted product (repeatable); an error if it is not deleted
 $S/state.py summary <dir>                                            # counts per status, failed, verify, decision origins, phase, removed
 $S/dryrun.py <dir>                                                   # exit 1 on blocking warnings, state drift, payload errors, concept files from another products.json or mapping, stale concept decisions or missing decisions; in a later phase also diff.json, snapshots and phase decisions (references/phases.md)
 $S/plan_shared.py <dir> [--ready]

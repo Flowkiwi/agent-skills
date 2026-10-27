@@ -231,6 +231,21 @@ class DryRunPhasesTest(unittest.TestCase):
         self.assertIn("shared changes: 1 destructive (confirmed 1), 0 updates", text)
         self.assertNotIn("destructive shared changes not confirmed", text)
 
+    def test_deleted_product_back_blocks_until_reset(self):
+        st = read_json(self.path("state.json"))
+        state.mark_deleted(st, [s["iri"] for s in state.undo_plan(st, "product:2227")])
+        write_json(self.path("state.json"), st)
+        run("diff.py", self.dir)
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("deleted products back in products.json, never re-created: 2227 (to create them again: "
+                      "state.py reset-deleted %s --handle 2227, then state.py sync and diff.py" % self.dir, text)
+        run("state.py", "reset-deleted", self.dir, "--handle", "2227")
+        self.regenerate()
+        text, code = dryrun.report(self.dir)
+        self.assertNotIn("deleted products back in products.json", text)
+        self.assertIn("  new: 1\n", text)
+
     def test_first_phase_has_no_changes_section(self):
         st = read_json(self.path("state.json"))
         st["phase"] = 1

@@ -68,6 +68,33 @@ class DiffTest(unittest.TestCase):
         d = diff.diff(self.st, self.products)
         self.assertEqual((d["removed"], d["already_archived"], d["new"]), ([], [], []))
 
+    def test_deleted_back_in_products_is_reported(self):
+        self.st["products"]["2230"]["status"] = "deleted"
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["deleted_present"], d["new"], d["changed"]), (["2230"], [], {}))
+        self.assertIn("deleted, back in products.json (never re-created): 2230", diff.report(d))
+
+    def test_regrouping_reverted_needs_the_deleted_handle_reset(self):
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        split = {"products": [self.products["products"][0]] + [
+            dict(duo, key=v["sku"], handle=v["sku"], options=[], variants=[dict(v, option_values=[])])
+            for v in duo["variants"]]}
+        state.sync_products(self.st, split)
+        self.assertEqual(diff.diff(self.st, split)["removal"], {"2230": "delete_rekeyed"})
+        state.mark_deleted(self.st, [s["iri"] for s in state.undo_plan(self.st, "product:2230")])
+        state.merge(self.st, [created_line("1005", split), created_line("1006", split)], split)
+        state.start_phase(self.st)
+        state.sync_products(self.st, self.products)
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(d["deleted_present"], ["2230"])
+        self.assertEqual(d["removal"], {"1005": "removed_action", "1006": "removed_action"})
+        state.reset_deleted(self.st, ["2230"])
+        state.sync_products(self.st, self.products)
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["deleted_present"], d["new"]), ([], ["2230"]))
+        self.assertEqual(d["removal"], {"1005": "delete_rekeyed", "1006": "delete_rekeyed"})
+
     def test_reused_removed_is_unmanaged(self):
         self.st["products"]["2230"]["items"][0]["status"] = "reused"
         self.products["products"] = self.products["products"][:1]

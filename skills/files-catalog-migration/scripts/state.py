@@ -14,7 +14,7 @@ Usage:
   python3 state.py phase <dir> [--start]
   python3 state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>|product:<handle>
   python3 state.py deleted <dir> --iris-file <file.json>
-  python3 state.py reset-deleted <dir>
+  python3 state.py reset-deleted <dir> [--handle <handle>]...
   python3 state.py summary <dir>
 """
 
@@ -851,8 +851,15 @@ def mark_deleted(state, iris):
     return state
 
 
-def reset_deleted(state):
-    for product in state["products"].values():
+def reset_deleted(state, handles=None):
+    """Deleted products back to pending, with no items: every one, or only `handles` (each must be deleted)."""
+    if handles:
+        for handle in handles:
+            if (state["products"].get(handle) or {}).get("status") != "deleted":
+                raise ValueError(f"'{handle}' is not a deleted product")
+    for handle, product in state["products"].items():
+        if handles and handle not in handles:
+            continue
         if product["status"] == "deleted":
             for key in ("written", "updated_phase", "removed"):
                 product.pop(key, None)
@@ -1073,7 +1080,9 @@ def main(argv):
     p.add_argument("dir")
     p.add_argument("--iris-file", required=True)
 
-    sub.add_parser("reset-deleted").add_argument("dir")
+    p = sub.add_parser("reset-deleted")
+    p.add_argument("dir")
+    p.add_argument("--handle", action="append", help="only this deleted product (repeatable)")
     sub.add_parser("summary").add_argument("dir")
 
     args = parser.parse_args(argv[1:])
@@ -1183,7 +1192,11 @@ def main(argv):
     elif args.command == "deleted":
         mark_deleted(state, _read_json(args.iris_file))
     elif args.command == "reset-deleted":
-        reset_deleted(state)
+        try:
+            reset_deleted(state, args.handle)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
     elif args.command == "summary":
         print(json.dumps(summary(state), indent=2))
         return 0

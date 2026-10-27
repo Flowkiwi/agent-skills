@@ -50,7 +50,9 @@ diff.json:
                     snapshot changed or appeared since)
   source            sha256 of the products of products.json and of the decisions (the phase decisions aside):
                     dryrun.py blocks when products.json or a decision changed since diff.py ran
-Deleted handles never appear.
+  deleted_present   deleted handles back in products.json: never re-created until state.py reset-deleted --handle
+                    makes them pending again (then state.py sync), else left out of every other key
+Deleted handles appear nowhere else.
 """
 
 import json
@@ -248,7 +250,7 @@ def diff(state_data, products):
     entries = state_data.get("products", {})
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
-              "blocked_rekeys": {}, "moved": [], "blocked_moves": [], "no_written": [], "errors": {}, "conflicts": {},
+              "blocked_rekeys": {}, "moved": [], "blocked_moves": [], "deleted_present": [], "no_written": [], "errors": {}, "conflicts": {},
               "missing_snapshots": [], "snapshots": {}, "conflicts_checked": False,
               "source": source_fingerprint(state_data, products)}
 
@@ -256,6 +258,7 @@ def diff(state_data, products):
         product = entries.get(handle)
         status = product["status"] if product else "pending"
         if status == "deleted":
+            result["deleted_present"].append(handle)
             continue
         if status not in LIVE:
             result["new"].append(handle)
@@ -466,6 +469,8 @@ def report(result):
         lines.append(f"unmanaged items of {handle} (reused, never written): {', '.join(paths)}")
     if result["no_written"]:
         lines.append(f"no written snapshot, not compared: {', '.join(result['no_written'])}")
+    if result["deleted_present"]:
+        lines.append(f"deleted, back in products.json (never re-created): {', '.join(result['deleted_present'])}")
     for handle, message in result["errors"].items():
         lines.append(f"error: {handle}: {message}")
     return "\n".join(lines)

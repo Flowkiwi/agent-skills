@@ -15,8 +15,9 @@ In a later phase (state phase > 1) a `Changes (phase <n>):` section summarizes d
 --changes, and the dry-run also blocks while diff.json is missing, from another phase or computed from another
 products.json or other decisions, while a changed or removed product has no snapshot read in this phase
 (tmp/remote/<handle>.json) or the conflicts were not computed from the current snapshots, while payload.py fails
-for a product of diff.json, and while the removed products, the rekeyed products or the destructive shared changes
-lack their decision of the phase (removed_action, confirmed_rekey, confirmed_changes). A created handle gone from
+for a product of diff.json, while a deleted product is back in products.json (diff.json deleted_present), and while
+the removed products, the rekeyed products or the destructive shared changes lack their decision of the phase
+(removed_action, confirmed_rekey, confirmed_changes). A created handle gone from
 products.json is then a removed product (flagged by state.py sync), not a drift.
 """
 
@@ -363,6 +364,18 @@ def diff_problems(directory: str, diff_data, state: dict, products: dict) -> Lis
     return []
 
 
+def deleted_present(directory: str, diff_data: dict) -> List[str]:
+    """Deleted products back in products.json are never re-created silently: the developer decides."""
+    handles = diff_data.get("deleted_present") or []
+    if not handles:
+        return []
+    command = " ".join(["state.py", "reset-deleted", shlex.quote(directory)]
+                       + ["--handle %s" % shlex.quote(h) for h in handles])
+    return ["  deleted products back in products.json, never re-created: %s (to create them again: %s, then "
+            "state.py sync and diff.py; else take them out of products.json)" % (catalog._handles_text(handles),
+                                                                                command)]
+
+
 def decision_problems(diff_data: dict, state: dict) -> List[str]:
     phase = state.get("phase", 1)
     removal = diff_data.get("removal") or {}
@@ -462,6 +475,7 @@ def phase_checks(directory: str, state: dict, products: dict) -> Tuple[List[str]
         problems += diff_errors(diff_data)
         problems += snapshot_problems(directory, diff_data, state)
         problems += decision_problems(diff_data, state)
+        problems += deleted_present(directory, diff_data)
     shared_lines, shared_blocking = shared_changes(state, products)
     return lines + shared_lines, problems + shared_blocking
 

@@ -180,6 +180,16 @@ class StateFunctionsTest(unittest.TestCase):
         self.assertEqual(product["items"], [])
         self.assertEqual(self.state["products"]["b"]["status"], "created")
 
+    def test_reset_deleted_only_the_named_handles(self):
+        self._populate()
+        state.mark_deleted(self.state, [iri("products", "a"), iri("products", "b")])
+        with self.assertRaisesRegex(ValueError, "^'c' is not a deleted product$"):
+            state.reset_deleted(self.state, ["a", "c"])
+        self.assertEqual(self.state["products"]["a"]["status"], "deleted")
+        state.reset_deleted(self.state, ["a"])
+        self.assertEqual(self.state["products"]["a"]["status"], "pending")
+        self.assertEqual(self.state["products"]["b"]["status"], "deleted")
+
     def test_sync_marks_removed_handles_skipped(self):
         state.sync_products(self.state, products("a", "b", "c", "d"))
         self.assertEqual(self.state["products"]["e"]["status"], "skipped")
@@ -570,6 +580,25 @@ class StateCliTest(unittest.TestCase):
     def test_result_rejects_missing_keys(self):
         result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
         self.assertNotEqual(run_cli("result", result_file, "--json", '{"handle": "a"}').returncode, 0)
+
+    def test_reset_deleted_one_handle(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
+        result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
+        for handle in ("a", "b"):
+            line = {"handle": handle, "status": "created", "iri": iri("products", handle),
+                    "items": [item("product", iri("products", handle))], "error": None}
+            run_cli("result", result_file, "--json", json.dumps(line))
+        run_cli("merge", self.dir)
+        iris_file = os.path.join(self.dir, "deleted.json")
+        with open(iris_file, "w") as f:
+            json.dump([iri("products", "a"), iri("products", "b")], f)
+        run_cli("deleted", self.dir, "--iris-file", iris_file)
+        result = run_cli("reset-deleted", self.dir, "--handle", "c")
+        self.assertEqual((result.returncode, result.stderr), (1, "error: 'c' is not a deleted product\n"))
+        self.assertEqual(run_cli("reset-deleted", self.dir, "--handle", "a").returncode, 0)
+        with open(os.path.join(self.dir, "state.json")) as f:
+            products = json.load(f)["products"]
+        self.assertEqual((products["a"]["status"], products["b"]["status"]), ("pending", "deleted"))
 
     def test_merge_does_not_replay_merged_results(self):
         run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
