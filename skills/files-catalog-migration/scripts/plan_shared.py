@@ -5,18 +5,20 @@ Usage:
 
 Covers the core import.key marker definition, then (when decided) categories parents first, attribute definitions,
 attribute options, collections parents first, metaobject definitions, metaobject entries (definition order, then
-entry order), the reference metafield definitions of the metaobjects, other metafield definitions. Keys already
+entry order), the reference metafield definitions of the metaobjects, other metafield definitions, then the taxes
+of the `prices` countries without a tax IRI (key `tax:<country code>:<rate>`). Keys already
 recorded `created` or `reused` in state.json are skipped. Every entry carries a `spec` (what was asked), recorded
 with the IRI to detect later drift.
 A body referencing a shared element not recorded yet holds a `<key IRI>` placeholder and lists it
 in `depends_on`; --ready prints only the entries whose dependencies are all recorded. Other modules'
-shared elements (countries, taxes, suppliers, channels) follow their references.
+shared elements (countries, suppliers, channels) follow their references.
 """
 
 import argparse
 import json
 import os
 import sys
+from decimal import ROUND_HALF_UP, Decimal
 
 from payload import MARKER_KEY, PayloadError, dumps, shared_iri
 
@@ -201,6 +203,18 @@ def plan(state, metafield_columns=None):
                 f"list_metafield_definitions: namespace.key {namespace_key}, owner type products",
                 _metafield_definition(namespace_key, name, definition["type"]),
                 {"type": definition["type"], "name": name})
+
+    prices = decisions.get("prices")
+    if isinstance(prices, dict) and "countries" in prices:
+        for country in prices["countries"]:
+            if country.get("tax"):
+                continue
+            rate = str(country["rate"])
+            api_rate = Decimal(rate).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            add(f"tax:{country['code']}:{rate}", "prices", "create_tax",
+                f'list_taxes: country {country["country"]}, rate {rate} (the API returns "{api_rate}")',
+                {"name": country["tax_name"], "rate": rate, "country": country["country"]},
+                {"rate": rate, "country": country["country"]})
 
     return [e for e in entries if not _recorded(state, e["key"])]
 

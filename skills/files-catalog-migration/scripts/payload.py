@@ -3,7 +3,8 @@
 The import.key marker (shared `metafield_definition:import.key`) carries the product handle as its value.
 
 Usage:
-  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|all] [--dry-run]
+  python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|prices|all]
+                    [--dry-run]
 
 Workers copy every value verbatim from this output. Invisible or special whitespace characters
 (no-break spaces, zero-width characters, soft hyphens, control characters...) are printed as
@@ -20,6 +21,8 @@ collections, to send with its existing ones), and `metafields` as
 with transform null (value as is), list_json, list, number, json or strip_html. The reference metafields of
 `metaobjects` (as written by metaobjects.py build) follow in the --step metafields output: definition IRI from shared
 `metafield_definition:<namespace.key>`, value the IRI of shared `metaobject:<type>:<entry handle>`.
+`prices` as written by prices.py build: one sale offer per variant and country, tax from the country or shared
+`tax:<code>:<rate>`, variant `<variant IRI of <sku>>` replaced by the worker with the IRI of that variant.
 """
 
 import argparse
@@ -32,7 +35,7 @@ import unicodedata
 
 STATUSES = {"active": "ACTIVE", "draft": "DRAFT", "archived": "ARCHIVED"}
 MARKER_KEY = "metafield_definition:import.key"
-STEPS = ("product", "options", "variants", "metafields", "taxonomy", "collections", "all")
+STEPS = ("product", "options", "variants", "metafields", "taxonomy", "collections", "prices", "all")
 TRANSFORMS = (None, "list_json", "list", "number", "json", "strip_html")
 ESCAPED_CATEGORIES = {"Cc", "Cf", "Zs", "Zl", "Zp"}
 
@@ -244,6 +247,37 @@ def metafields(product, state, placeholders=False):
     return result + reference_metafields(product, state, placeholders)
 
 
+def sale_offers(product, state, placeholders=False):
+    decision = _module_decision(state.get("decisions", {}), "prices", "offers")
+    if decision is None:
+        return []
+    handle = product["handle"]
+    offers = decision["offers"].get(handle) or {}
+    skus = [v["sku"] for v in product["variants"]]
+    unknown = [sku for sku in offers if sku not in skus]
+    if unknown:
+        raise PayloadError(f"decision 'prices' has offers for SKU {', '.join(unknown)} of {handle}, not in "
+                           "products.json: extract the prices again and record the decision")
+    result = []
+    for sku in skus:
+        for country in decision["countries"]:
+            code = country["code"]
+            offer = (offers.get(sku) or {}).get(code)
+            if offer is None:
+                continue
+            discount = offer.get("discountTaxExcludedPrice")
+            body = {"variant": f"<variant IRI of {sku}>", "country": country["country"],
+                    "tax": country.get("tax") or shared_iri(state, f"tax:{code}:{country['rate']}", placeholders),
+                    "status": decision.get("status") or "/api/statuses/ACTIVE",
+                    "taxExcludedPrice": {"amount": offer["taxExcludedPrice"], "currency": country["currency"]},
+                    "discountTaxExcludedPrice": {"amount": discount, "currency": country["currency"]}
+                    if discount is not None else None}
+            if decision.get("channels"):
+                body["channels"] = list(decision["channels"])
+            result.append({"sku": sku, "country": code, "body": body})
+    return result
+
+
 def build(products, state, handle, step="all", placeholders=False):
     product = next((p for p in products["products"] if p["handle"] == handle), None)
     if product is None:
@@ -259,6 +293,8 @@ def build(products, state, handle, step="all", placeholders=False):
         payload["variants"] = variants(product)
     if step in ("metafields", "all"):
         payload["metafields"] = metafields(product, state, placeholders)
+    if step in ("prices", "all"):
+        payload["prices"] = sale_offers(product, state, placeholders)
     if step == "taxonomy":
         payload["taxonomy"] = taxonomy_fields(product, state, placeholders)
     if step == "collections":
