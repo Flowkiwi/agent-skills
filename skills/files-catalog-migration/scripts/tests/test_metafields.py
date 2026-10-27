@@ -98,10 +98,36 @@ class MetafieldsTest(ConceptTestCase):
 
     def test_decimal_comma_is_a_number(self):
         m, codes = self.extract_with(self.one("custom.poids", "Poids", "number_decimal", {"from": ["main:poids_net"]}))
-        self.assertEqual(m["values"]["2226"], {"custom.poids": "1,8"})
+        self.assertEqual(m["values"]["2226"], {"custom.poids": "1.8"})
         self.assertNotIn("not_a_number", codes)
         out = payload.build(self.products(), self.state_with_decision("metafields", m), "2226", placeholders=True)
         self.assertEqual(out["metafields"][0]["body"]["value"], 1.8)
+
+    def test_decimal_comma_is_normalised_in_lists(self):
+        m, codes = self.extract_with(self.one("custom.poids", "Poids", "list__number_decimal",
+                                              {"from": ["main:poids_net", "main:dim_poids_brut"], "pick": "all"}))
+        self.assertEqual(m["values"]["2226"], {"custom.poids": ["1.8", "2.1"]})
+        self.assertNotIn("not_a_number", codes)
+        out = payload.build(self.products(), self.state_with_decision("metafields", m), "2226", placeholders=True)
+        self.assertEqual(out["metafields"][0]["body"]["value"], '["1.8", "2.1"]')
+
+    def test_integer_with_decimal_comma_is_not_an_integer(self):
+        m, codes = self.extract_with(self.one("custom.poids", "Poids", "number_integer", {"from": ["main:poids_net"]}))
+        self.assertNotIn("2226", m["values"])
+        self.assertIn("not_a_number", codes)
+
+    def test_later_row_of_a_grouped_product_warns(self):
+        m, _ = self.extract_with(self.one("custom.coloris", "Coloris", "single_line_text_field",
+                                          {"from": ["main:coloris"]}))
+        self.assertEqual(m["values"]["2230"], {"custom.coloris": "Noir"})
+        found = [w for w in m["warnings"] if w["code"] == "group_conflict"]
+        self.assertEqual([(w["handle"], w["row"], w["field"]) for w in found], [("2230", 9, "metafields.custom.coloris")])
+        self.assertIn("'Rouge'", found[0]["message"])
+
+    def test_same_value_on_every_row_does_not_warn(self):
+        m, codes = self.extract_with(self.one("custom.matiere", "Matière", "single_line_text_field",
+                                              {"from": ["main:matiere"]}))
+        self.assertNotIn("group_conflict", codes)
 
     def test_too_long_single_line_is_kept(self):
         m, codes = self.extract_with(self.one("custom.long", "Long", "single_line_text_field",
@@ -167,7 +193,8 @@ class MetafieldsTest(ConceptTestCase):
         self.assertEqual(code, 0)
         lines = out.getvalue().splitlines()
         self.assertTrue(any(line.startswith("  custom.poids_net 'Poids net (kg)' (number_decimal") for line in lines))
-        self.assertTrue(any(line.startswith("conflict: ") for line in lines))
+        conflict = lines.index(next(line for line in lines if line.startswith("conflict (")))
+        self.assertRegex(lines[conflict + 1], r"^  row \d+ \w+: ")
         self.assertEqual(lines[-1], "2 metafield definitions")
 
 

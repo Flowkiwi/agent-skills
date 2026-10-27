@@ -43,20 +43,21 @@ The mapping has no `sources`: its columns are those of `mappings/products.json`.
 
 ## Record
 
-1. `$S/extract.py <dir> metaobjects` writes `concepts/metaobjects.json` and prints the preview: each definition with its reference metafield, entry and product counts and sample handles, the warnings and the counts. Show it to the developer.
+1. `$S/extract.py <dir> metaobjects` writes `concepts/metaobjects.json` and prints the preview: each definition with its reference metafield, entry and product counts and sample handles, the warnings grouped by code (with their row and handle) and the counts. Show it to the developer.
 2. Settle the warnings through the mapping, then extract again:
 
-| Code                   | How it is settled                                                                                                  |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------ |
-| `entry_conflict`       | two products give the same handle with other field values (first kept): map the variants to one spelling           |
-| `unknown_entry`        | a reference field value is not an entry of its target (dropped): fix the spec or add the missing entry's product   |
-| `no_entry_key`         | a product has field values but no `entry_key` value: its other fields are not used; fill the column or ignore      |
-| `no_handle`            | the `entry_key` value has no letter or digit: map it to a real name or to `null`                                   |
-| `missing_required`     | the entry lacks a `required` field: the product is not linked; fill the column, map it, or make the field optional |
-| `list_in_single_field` | several values for a field that holds one (first kept): `pick: first`, a `join`, or a list type                    |
-| `not_a_number`         | a value that is not a number under a number type is dropped: fix the `value` spec, or change the type              |
-| `too_long`             | a `single_line_text_field` value over 255 characters is kept whole: switch to `multi_line_text_field`              |
-| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md`                                     |
+| Code                   | How it is settled                                                                                                                                              |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `entry_conflict`       | two products give the same handle with other field values (first kept): map the variants to one spelling                                                       |
+| `unknown_entry`        | a reference field value is not an entry of its target (dropped): fix the spec or add the missing entry's product                                               |
+| `no_entry_key`         | a product has field values but no `entry_key` value: its other fields are not used; fill the column or ignore                                                  |
+| `no_handle`            | the `entry_key` value has no letter or digit: map it to a real name or to `null`                                                                               |
+| `missing_required`     | the entry lacks a `required` field: the product is not linked; fill the column, map it, or make the field optional                                             |
+| `list_in_single_field` | several values for a field that holds one (first kept): `pick: first`, a `join`, or a list type                                                                |
+| `not_a_number`         | a value that is not a number under a number type is dropped (`1,8` is read as `1.8`): fix the `value` spec, or change the type                                 |
+| `too_long`             | a `single_line_text_field` value over 255 characters is kept whole and blocks the dry-run: switch to `multi_line_text_field`                                   |
+| `group_conflict`       | a later row of a grouped product gives another field value than the first row (kept): accept it, or take the value from a column that is the same on every row |
+| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md`                                                                                 |
 
 3. `$S/state.py decide <dir> --key metaobjects --value-file <dir>/concepts/metaobjects.json --origin agent` (`--origin developer` when the developer asked for it).
 

@@ -9,6 +9,7 @@ The values of a product come from its first row. Entry handle = extract.slugify(
 import re
 from typing import Dict, List
 
+import catalog
 import mapping
 import metafields
 from mapping import MappingError, evaluate, is_spec, warn
@@ -224,14 +225,19 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
         reported = set()
         for product in products:
             handle = product["handle"]
-            first = (rows.get(handle) or [None])[0]
-            if first is None:
+            product_rows = rows.get(handle) or []
+            if not product_rows:
                 continue
+            first = product_rows[0]
             fields = {}  # type: Dict[str, object]
             for f in d["fields"]:
                 value = field_value(f, kind, first, handle, sources, warnings, cleaner, handles)
                 if value is not None:
                     fields[f["key"]] = value
+                for row in product_rows[1:]:
+                    other = field_value(f, kind, row, handle, sources, [], cleaner, handles)
+                    metafields.group_conflict(warnings, row.row, handle, "metaobjects.%s.%s" % (kind, f["key"]),
+                                              other, first.row, value)
             if key_field not in fields:
                 if fields:
                     warn(warnings, first.row, handle, "no_entry_key", "metaobjects.%s.%s" % (kind, key_field),
@@ -276,7 +282,7 @@ def format_preview(data: dict) -> str:
         sample = ", e.g. %s" % ", ".join(e["handle"] for e in entries[:3]) if entries else ""
         lines.append("  %s '%s'%s: %d entries, %d products%s" % (
             d["type"], d["name"], reference, len(entries), linked, sample))
-    for warning in data.get("warnings", []):
-        lines.append("%s: %s" % (warning["code"], warning["message"]))
+    if data.get("warnings"):
+        lines += catalog.format_warnings(data["warnings"]).splitlines()
     lines.append("%d metaobject definitions, %d entries" % (len(data["definitions"]), len(data["entries"])))
     return "\n".join(lines)

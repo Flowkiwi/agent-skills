@@ -112,6 +112,15 @@ class CollectionsTest(ConceptTestCase):
         self.assertEqual(payload.build(self.products(), st, "1004", step="collections", placeholders=True),
                          {"handle": "1004", "collections": []})
 
+    def test_case_variants_warn(self):
+        c = self.extract_with(self.mapping_with(value={"from": ["main:marque"]}, assign={}))
+        self.assertEqual([x["path"] for x in c["collections"] if x["path"].casefold() == "toastine"],
+                         ["TOASTINE", "Toastine"])
+        found = [w for w in c["warnings"] if w["code"] == "path_case"]
+        self.assertEqual(len(found), 1)
+        self.assertEqual(found[0]["field"], "collections")
+        self.assertIn("'TOASTINE' and 'Toastine' differ only by case", found[0]["message"])
+
     def test_cli_prints_the_preview(self):
         self.write_mapping(self.mapping_with(assign={"2226": ["PD"]}))
         out = io.StringIO()
@@ -121,7 +130,7 @@ class CollectionsTest(ConceptTestCase):
         lines = out.getvalue().splitlines()
         self.assertIn("Toastine (4)", lines)
         self.assertIn("Brioche & Co (1)", lines)
-        self.assertTrue(any(line.startswith("short_collection_name: ") for line in lines))
+        self.assertIn("short_collection_name (1)", lines)
         self.assertEqual(lines[-1], "4 collections")
 
 

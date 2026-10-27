@@ -29,7 +29,7 @@ Flowkiwi model: a metafield definition (`namespace`, `key`, `name`, `ownerType` 
 1. **Retained columns**: the rows of `$S/columns.py propose <dir>` with role `metafield` (numbers, dates, technical specifications with a unit), with the proposed type from the values. Show them and ask which ones to keep; the others stay out of the catalog (or become attributes, `references/taxonomy.md`, when the developer wants to filter on them).
 2. **Namespace and key**: namespace `custom` by default, key from the technical code of the column (`dim_poids_net` -> `custom.poids_net`), lowercase, 3+ characters. Never reuse a key of another definition.
 3. **Name**: in `decisions.data_language`, with the unit when the column has one (`Poids net (kg)`).
-4. **Values**: the value of a product comes from its first row. A column with several values per product (`pick: all`, a `split` transform) needs a list type; a list type wraps a single value in a list.
+4. **Values**: the value of a product comes from its first row (another value on a later row of a grouped product: `group_conflict`). Values of a number type are written as the `decimal` transform reads them (`1,8` -> `1.8`), in lists too. A column with several values per product (`pick: all`, a `split` transform) needs a list type; a list type wraps a single value in a list.
 
 ## Validate types
 
@@ -54,15 +54,16 @@ List values: the format Flowkiwi expects for a list metafield is checked with on
 
 ## Record
 
-1. `$S/extract.py <dir> metafields` writes `concepts/metafields.json` and prints the preview: each definition with its type, transform, product count and a sample value, the warnings and the definition count. Show it to the developer.
+1. `$S/extract.py <dir> metafields` writes `concepts/metafields.json` and prints the preview: each definition with its type, transform, product count and a sample value, the warnings grouped by code (with their row and handle) and the definition count. Show it to the developer.
 2. Settle the warnings through the mapping, then extract again:
 
-| Code                   | How it is settled                                                                                                                                       |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `not_a_number`         | a value that is not a number under a number type is dropped: fix the `value` spec (a `decimal` transform strips units such as `kg`), or change the type |
-| `too_long`             | a `single_line_text_field` value over 255 characters is kept whole: switch to `multi_line_text_field`                                                   |
-| `list_in_single_field` | several values for a type that holds one (first kept): `pick: first`, a `join`, or a list type                                                          |
-| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md` (order, `conflicts: ignore`)                                             |
+| Code                   | How it is settled                                                                                                                                        |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `not_a_number`         | a value that is not a number under a number type is dropped: fix the `value` spec (a `decimal` transform strips units such as `kg`), or change the type  |
+| `too_long`             | a `single_line_text_field` value over 255 characters is kept whole and blocks the dry-run: switch to `multi_line_text_field`                             |
+| `list_in_single_field` | several values for a type that holds one (first kept): `pick: first`, a `join`, or a list type                                                           |
+| `group_conflict`       | a later row of a grouped product gives another value than the first row (kept): accept it, or take the value from a column that is the same on every row |
+| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md` (order, `conflicts: ignore`)                                              |
 
 3. `$S/state.py decide <dir> --key metafields --value-file <dir>/concepts/metafields.json --origin developer` (`--origin agent` when you chose the columns).
 

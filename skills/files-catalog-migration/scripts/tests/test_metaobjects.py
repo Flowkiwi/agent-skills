@@ -130,9 +130,11 @@ class MetaobjectsTest(ConceptTestCase):
         spec = with_origin_definition(FIXTURE)
         spec["definitions"][0]["fields"][0]["value"] = {"from": ["main:coloris"], "map": {"Blanc": None}}
         m, codes = self.extract_with(spec)
-        # 2227 toastine: pays noir vs argente (first); 1004 Brioche & Co: Blanc has no pays entry
-        self.assertEqual(codes, ["entry_conflict", "unknown_entry"])
-        self.assertEqual(m["warnings"][1]["handle"], "1004")
+        # 2227 toastine: pays noir vs argente (first); 1004 Brioche & Co: Blanc has no pays entry;
+        # 2230: pays noir (first row, kept) vs rouge
+        self.assertEqual(codes, ["group_conflict", "entry_conflict", "unknown_entry"])
+        self.assertEqual(m["warnings"][0]["handle"], "2230")
+        self.assertEqual(m["warnings"][2]["handle"], "1004")
         brioche = [e for e in m["entries"] if e["handle"] == "brioche-co"][0]
         self.assertEqual(brioche["fields"], {"nom": "Brioche & Co"})
 
@@ -181,10 +183,19 @@ class MetaobjectsTest(ConceptTestCase):
         spec = with_origin_definition(FIXTURE)
         spec["definitions"][1]["fields"][1]["value"] = {"from": ["main:coloris", "main:matiere"], "pick": "all"}
         m, codes = self.extract_with(spec)
-        self.assertEqual(set(codes), {"list_in_single_field", "entry_conflict"})
+        self.assertEqual(set(codes), {"list_in_single_field", "entry_conflict", "group_conflict"})
         first = [w for w in m["warnings"] if w["code"] == "list_in_single_field"][0]
         self.assertEqual((first["handle"], first["field"]), ("2226", "metaobjects.marque.pays"))
         self.assertEqual(self.toastine(m)["fields"]["pays"], "argente")     # first value kept
+
+    def test_number_field_with_decimal_comma(self):
+        spec = copy.deepcopy(FIXTURE)
+        spec["definitions"][0]["fields"].append({"key": "poids", "name": "Poids", "type": "number_decimal",
+                                                 "value": {"from": ["main:poids_net"]}})
+        m, _ = self.extract_with(spec)
+        self.assertEqual(self.toastine(m)["fields"]["poids"], "1.8")
+        brioche = [e for e in m["entries"] if e["handle"] == "brioche-co"][0]
+        self.assertEqual(brioche["fields"]["poids"], "1.1")
 
     def test_cli_prints_the_preview(self):
         self.write_mapping(FIXTURE)

@@ -8,6 +8,7 @@ import re
 import unicodedata
 from typing import Dict, Iterable, List, Optional, Tuple
 
+import catalog
 import mapping
 from mapping import MappingError, evaluate, is_spec, warn
 
@@ -75,9 +76,11 @@ def category_path(raw, separator, drop_levels=0, depth=None, path_map=None, rena
 
 
 def path_tree(paths: Iterable[str], min_length: int, code: str, field: str) -> Tuple[List[dict], List[dict]]:
-    """Every node of the given ' > ' paths, sorted by segments so parents come first, and a `code` warning
-    for each node name shorter than min_length. Shared by categories and collections."""
+    """Every node of the given ' > ' paths, sorted by segments so parents come first, a `code` warning for
+    each node name shorter than min_length and a `path_case` warning for two nodes differing only by case.
+    Shared by categories and collections."""
     nodes, warnings, seen = [], [], set()
+    folded = {}  # type: Dict[str, str]
     for path in sorted(set(paths), key=lambda p: p.split(SEP)):
         parts = path.split(SEP)
         for i in range(1, len(parts) + 1):
@@ -89,6 +92,11 @@ def path_tree(paths: Iterable[str], min_length: int, code: str, field: str) -> T
             if len(parts[i - 1]) < min_length:
                 warn(warnings, None, None, code, field,
                      "'%s': name shorter than %d characters, rename it" % (node, min_length))
+            same = folded.setdefault(node.casefold(), node)
+            # children of two case variants are reported once, by their parents
+            if same != node and same.split(SEP)[:-1] == parts[:i - 1]:
+                warn(warnings, None, None, "path_case", field,
+                     "'%s' and '%s' differ only by case: map them to one spelling" % (same, node))
     return nodes, warnings
 
 
@@ -325,7 +333,7 @@ def format_preview(taxonomy: dict) -> str:
                 d["code"], d["name"], d.get("type", "list"), len(d.get("values", {})),
                 "multiple" if d.get("multiple") else "single", d.get("categories", []),
                 ", options: " + options if options else ""))
-    for warning in taxonomy.get("warnings", []):
-        lines.append("%s: %s" % (warning["code"], warning["message"]))
+    if taxonomy.get("warnings"):
+        lines += catalog.format_warnings(taxonomy["warnings"]).splitlines()
     lines.append("%d categories" % len(taxonomy["categories"]))
     return "\n".join(lines)

@@ -33,13 +33,14 @@ A product is in every collection its rows give (the value may be a list: `pick: 
 
 ## Record
 
-1. `$S/extract.py <dir> collections` writes `concepts/collections.json` and prints the preview: the collections (nested ones indented) with their product counts, the warnings and the collection count. Show it to the developer.
+1. `$S/extract.py <dir> collections` writes `concepts/collections.json` and prints the preview: the collections (nested ones indented) with their product counts, the warnings grouped by code (with their row and handle) and the collection count. Show it to the developer.
 2. Settle the warnings through the mapping, then extract again:
 
-| Code                    | How it is settled                                                                          |
-| ----------------------- | ------------------------------------------------------------------------------------------ |
-| `short_collection_name` | a collection name under 3 characters: translate or rename it through `map`                 |
-| `unknown_handle`        | `assign` names a handle that is not in `products.json`: fix the handle or remove the entry |
+| Code                    | How it is settled                                                                                                                                                |
+| ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `short_collection_name` | a collection name under 3 characters: translate or rename it through `map`                                                                                       |
+| `unknown_handle`        | `assign` names a handle that is not in `products.json`: fix the handle or remove the entry                                                                       |
+| `path_case`             | two collections differ only by case (`TOASTINE`, `Toastine`): map them to one spelling in the `value` spec (`map` with `map_ignore_case`), else both are created |
 
 3. `$S/state.py decide <dir> --key collections --value-file <dir>/concepts/collections.json --origin developer` (`--origin agent` for a proposal).
 

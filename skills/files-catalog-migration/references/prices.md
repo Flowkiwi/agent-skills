@@ -53,22 +53,23 @@ Price rules (amounts are strings with 2 decimals, `.` separator):
 
 Offers are keyed by SKU: fill the missing codes first (`$S/codes.py fill`, `references/products.md`), then extract the prices again whenever `products.json` changes.
 
-1. `$S/extract.py <dir> prices` writes `concepts/prices.json` and prints the preview: per country the currency, the tax (to create or reused), the offer and discount counts and the first 3 converted offers, then the warnings and the totals.
+1. `$S/extract.py <dir> prices` writes `concepts/prices.json` and prints the preview: per country the currency, the tax (to create or reused), the offer and discount counts and the first 3 converted offers, then the warnings grouped by code (with their row and handle) and the totals.
 2. **Show 3 converted examples for validation** before going further, each next to its source price (`products.json` variant, or the cell of the `price` column): `39.90 TTC, compare-at 49.90 -> 41.58 with discount 33.25`, `45 TTC -> 37.50`, one more with a discount or another rate. Wait for the developer to confirm the reading.
 3. Settle the warnings through the mapping, then extract again:
 
-| Code                   | How it is settled                                                                                         |
-| ---------------------- | --------------------------------------------------------------------------------------------------------- |
-| `missing_price`        | no price for this SKU and country, offer skipped: fill the column, or accept it (listed for the client)   |
-| `not_a_number`         | the price is not a positive amount (offer skipped) or the compare-at price is not (ignored): fix the spec |
-| `missing_sku`          | the variant has no SKU, offer skipped: fill the codes, then extract again                                 |
-| `duplicate_sku`        | two variants of a product share a SKU, offer skipped: fix the SKU (`fixes.json`)                          |
-| `list_in_single_field` | a price spec gives several values (first kept): `pick: first` or a single column                          |
-| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md`                            |
+| Code                   | How it is settled                                                                                                        |
+| ---------------------- | ------------------------------------------------------------------------------------------------------------------------ |
+| `missing_price`        | no price for this SKU and country, offer skipped: fill the column, or accept it (listed for the client)                  |
+| `not_a_number`         | the price is not an amount of 0 or more (offer skipped) or the compare-at price is not (ignored): fix the spec           |
+| `zero_price`           | a price of 0: a `0.00` offer is created; check it with the developer (listed for the client) or map it to an empty value |
+| `missing_sku`          | the variant has no SKU, offer skipped, blocks the dry-run: fill the codes, then extract again                            |
+| `duplicate_sku`        | two variants of a product share a SKU, offer skipped: fix the SKU (`fixes.json`)                                         |
+| `list_in_single_field` | a price spec gives several values (first kept): `pick: first` or a single column                                         |
+| `conflict`             | the columns of a `from` list disagree: settle it as in `references/mapping.md`                                           |
 
 4. `$S/state.py decide <dir> --key prices --value-file <dir>/concepts/prices.json --origin developer`.
 
-`concepts/prices.json`: `{"countries": [{"country", "code", "currency", "tax", "rate", "tax_name", "tax_included"}], "channels": null, "status": "<iri>", "offers": {"<handle>": {"<sku>": {"<code>": {"taxExcludedPrice": "16.58", "discountTaxExcludedPrice": null}}}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`): the mapping without its field specs (`rate` as text without trailing zeros), products and variants without any offer left out of `offers`. The `missing_price` and `not_a_number` warnings also carry `sku` and `country`. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/prices.json`: `{"countries": [{"country", "code", "currency", "tax", "rate", "tax_name", "tax_included"}], "channels": null, "status": "<iri>", "offers": {"<handle>": {"<sku>": {"<code>": {"taxExcludedPrice": "16.58", "discountTaxExcludedPrice": null}}}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`): the mapping without its field specs (`rate` as text without trailing zeros), products and variants without any offer left out of `offers`. Every warning also carries `sku` (`null` for `missing_sku`) and `country`. `tax_name` is cleaned like the cells. `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 

@@ -160,6 +160,29 @@ class PricesTest(ConceptTestCase):
         self.assertEqual(result["offers"], {})
         self.assertEqual([(w["code"], w["sku"], w["country"]) for w in result["warnings"]], [("missing_sku", None, "FR")])
 
+    def test_zero_price_warns_and_keeps_the_offer(self):
+        data, rows, sources, _ = extract.product_rows(self.dir)
+        product = next(p for p in data["products"] if p["handle"] == "2228")
+        product["variants"][0]["price"] = "0"
+        result = prices.build([product], rows, FR_MAPPING, sources, [])
+        sku = product["variants"][0]["sku"]
+        self.assertEqual(result["offers"]["2228"][sku]["FR"], {"taxExcludedPrice": "0.00",
+                                                              "discountTaxExcludedPrice": None})
+        self.assertEqual([(w["code"], w["sku"], w["country"]) for w in result["warnings"]], [("zero_price", sku, "FR")])
+
+    def test_negative_price_is_not_an_amount(self):
+        data, rows, sources, _ = extract.product_rows(self.dir)
+        product = next(p for p in data["products"] if p["handle"] == "2228")
+        product["variants"][0]["price"] = "-1"
+        result = prices.build([product], rows, FR_MAPPING, sources, [])
+        self.assertEqual(result["offers"], {})
+        self.assertIn("is not an amount (a number, 0 or more), offer skipped", result["warnings"][0]["message"])
+
+    def test_tax_name_is_cleaned(self):
+        country = dict(FR_COUNTRY, tax_name="TVA\u00a020  FR ")
+        p = self.extract_with(dict(FR_MAPPING, countries=[country]))
+        self.assertEqual(p["countries"][0]["tax_name"], "TVA 20 FR")
+
     def test_mapping_errors(self):
         bad_countries = [
             [], [dict(FR_COUNTRY, country="FR")], [dict(FR_COUNTRY, code="fr")], [dict(FR_COUNTRY, currency="euro")],
@@ -189,7 +212,7 @@ class PricesTest(ConceptTestCase):
         lines = out.getvalue().splitlines()
         self.assertIn("FR (EUR, tax TVA 20 FR 20% to create, prices include tax): 6 offers, 1 with a discount", lines)
         self.assertIn("  2226 1001: 41.58, discounted 33.25", lines)
-        self.assertTrue(any(line.startswith("missing_price: ") for line in lines))
+        self.assertIn("missing_price (1)", lines)
         self.assertEqual(lines[-1], "6 offers for 1 country, 1 variant price missing")
 
 

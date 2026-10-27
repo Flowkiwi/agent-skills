@@ -7,6 +7,7 @@ state.py decide <dir> --key collections --value-file concepts/collections.json
 """
 from typing import Dict, List, Optional
 
+import catalog
 import mapping
 from mapping import MappingError, evaluate, is_spec, warn
 from taxonomy import SEP, path_tree, split_path
@@ -101,7 +102,7 @@ def format_preview(data: dict) -> str:
         indent = "  " * collection["path"].count(SEP)
         lines.append("%s%s (%d)" % (indent, collection["name"], counts.get(collection["path"], 0)))
     lines.append("Products in a collection: %d" % len(data["membership"]))
-    for warning in data.get("warnings", []):
-        lines.append("%s: %s" % (warning["code"], warning["message"]))
+    if data.get("warnings"):
+        lines += catalog.format_warnings(data["warnings"]).splitlines()
     lines.append("%d collections" % len(data["collections"]))
     return "\n".join(lines)

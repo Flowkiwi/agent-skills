@@ -69,21 +69,22 @@ A product's values are the distinct non-empty results of `value` over its rows, 
 
 ## Record
 
-1. `$S/extract.py <dir> taxonomy` writes `concepts/taxonomy.json` and prints the preview: the tree with the products per node (descendants included), the products without category, the attributes, the warnings and the category count. Show it to the developer.
+1. `$S/extract.py <dir> taxonomy` writes `concepts/taxonomy.json` and prints the preview: the tree with the products per node (descendants included), the products without category, the attributes, the warnings grouped by code (with their row and handle) and the category count. Show it to the developer.
 2. Settle the warnings through the mapping, then extract again:
 
-| Code                   | How it is settled                                                                              |
-| ---------------------- | ---------------------------------------------------------------------------------------------- |
-| `short_category_name`  | a category name under 3 characters: `rename` it or translate it through `map`                  |
-| `unknown_handle`       | `assign` names a handle that is not in `products.json`: fix the handle or remove the entry     |
-| `group_conflict`       | the rows of one product give different categories, the first wins: check it with the developer |
-| `list_in_single_field` | the category spec gives several values (`pick: all`, `split`): give it a single value          |
-| `option_case`          | two options differ only by case (`Inox`, `inox`): map them to one value in the attribute `map` |
-| `multiple_values`      | a product has several values for a single-value attribute, the first wins: `map` or `multiple` |
-| `too_long`             | a `string` value over 255 characters, kept whole: shorten it or make it a metafield            |
-| `uncategorized_values` | products without category lose their attribute values: give them a category or accept it       |
-| `no_values`            | no product with a category has a value: remove the attribute or check its column               |
-| `not_a_boolean`        | a cell of a `boolean` column is neither yes nor no: `map` it to a yes or no value              |
+| Code                   | How it is settled                                                                                                                      |
+| ---------------------- | -------------------------------------------------------------------------------------------------------------------------------------- |
+| `short_category_name`  | a category name under 3 characters: `rename` it or translate it through `map`                                                          |
+| `path_case`            | two categories differ only by case (`TOASTINE`, `Toastine`): `map` or `rename` them to one spelling, else both are created             |
+| `unknown_handle`       | `assign` names a handle that is not in `products.json`: fix the handle or remove the entry                                             |
+| `group_conflict`       | the rows of one product give different categories, the first wins: check it with the developer                                         |
+| `list_in_single_field` | the category spec gives several values (`pick: all`, `split`): give it a single value                                                  |
+| `option_case`          | two options differ only by case (`Inox`, `inox`): map them to one value in the attribute `map`                                         |
+| `multiple_values`      | a product has several values for a single-value attribute, the first wins: `map` or `multiple`                                         |
+| `too_long`             | a `string` value over 255 characters, kept whole, blocks the dry-run (the product would be refused): shorten it or make it a metafield |
+| `uncategorized_values` | products without category lose their attribute values: give them a category or accept it                                               |
+| `no_values`            | no product with a category has a value: remove the attribute or check its column                                                       |
+| `not_a_boolean`        | a cell of a `boolean` column is neither yes nor no: `map` it to a yes or no value                                                      |
 
 3. `$S/state.py decide <dir> --key taxonomy --value-file <dir>/concepts/taxonomy.json --origin developer`.
 

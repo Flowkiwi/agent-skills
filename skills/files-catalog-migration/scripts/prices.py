@@ -9,6 +9,7 @@ import re
 from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 from typing import Dict, List, Optional, Tuple
 
+import catalog
 import mapping
 from mapping import MappingError, evaluate, is_spec, warn
 
@@ -163,19 +164,27 @@ class PriceReader:
         if value is None:
             return None, failed
         number = mapping.parse_number(str(value))
+        row_number = row.row if row is not None else None
         if number is None or Decimal(number) < 0:
-            self.warn(row.row if row is not None else None, handle, sku, "not_a_number",
-                      "prices.%s.%s" % (country["code"], field), "SKU %s in %s: %r is not a positive amount, %s" % (
+            self.warn(row_number, handle, sku, "not_a_number", "prices.%s.%s" % (country["code"], field),
+                      "SKU %s in %s: %r is not an amount (a number, 0 or more), %s" % (
                           sku, country["code"], value,
                           "offer skipped" if field == "price" else "compare-at price ignored"),
                       country["code"])
             return None, True
+        if field == "price" and Decimal(number) == 0:
+            self.warn(row_number, handle, sku, "zero_price", "prices.%s.price" % country["code"],
+                      "SKU %s in %s: price %r, a 0.00 offer is created: check it with the client" % (
+                          sku, country["code"], value), country["code"])
         return number, False
 
 
-def decision_country(country: dict) -> dict:
+def decision_country(country: dict, cleaner=None) -> dict:
+    """The country as recorded: the mapping keys without the price specs, the tax name cleaned like the cells."""
     result = {key: country.get(key) for key in DECISION_KEYS}
     result["rate"] = plain_rate(country["rate"])
+    if cleaner is not None and result["tax_name"] is not None:
+        result["tax_name"] = cleaner.final(result["tax_name"])
     return result
 
 
@@ -212,7 +221,8 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
                 base, discount = offer_amounts(price, compare_at, country["rate"], country["tax_included"])
                 offers.setdefault(handle, {}).setdefault(sku, {})[code] = {
                     "taxExcludedPrice": base, "discountTaxExcludedPrice": discount}
-    return {"countries": [decision_country(c) for c in countries], "channels": m.get("channels"),
+    cleaner = next(iter(sources.values())).cleaner if sources else None
+    return {"countries": [decision_country(c, cleaner) for c in countries], "channels": m.get("channels"),
             "status": m.get("status", DEFAULT_STATUS), "offers": offers, "warnings": warnings}
 
 
@@ -238,8 +248,8 @@ def format_preview(data: dict) -> str:
             discount = offer["discountTaxExcludedPrice"]
             lines.append("  %s %s: %s%s" % (handle, sku, offer["taxExcludedPrice"],
                                             ", discounted %s" % discount if discount is not None else ""))
-    for warning in data.get("warnings", []):
-        lines.append("%s: %s" % (warning["code"], warning["message"]))
+    if data.get("warnings"):
+        lines += catalog.format_warnings(data["warnings"]).splitlines()
     missing = sum(1 for w in data.get("warnings", []) if w["code"] == "missing_price")
     lines.append("%s for %s, %s missing" % (plural(total, "offer", "offers"),
                                             plural(len(data["countries"]), "country", "countries"),

@@ -52,6 +52,13 @@ class TaxonomyCategoriesTest(ConceptTestCase):
                          [("short_collection_name", "collections", "extract")])
         self.assertIn("'PE'", warnings[0]["message"])
 
+    def test_path_tree_case_variants(self):
+        _, warnings = taxonomy.path_tree(["Maison > Cuisine", "maison > Cuisine", "Maison > cuisine", "Bar"],
+                                         3, "short_category_name", "categories")
+        self.assertEqual([(w["code"], w["field"]) for w in warnings], [("path_case", "categories")] * 2)
+        self.assertIn("'Maison > Cuisine' and 'Maison > cuisine'", warnings[0]["message"])
+        self.assertIn("'Maison' and 'maison'", warnings[1]["message"])
+
     def test_demo_tree(self):
         t = self.extract_with(FIXTURE)
         self.assertEqual([c["path"] for c in t["categories"]],
@@ -128,7 +135,7 @@ class TaxonomyCategoriesTest(ConceptTestCase):
         spec = {"value": None, "separator": None, "assign": {"2226": "Grille-pain", "nope": "X"}}
         text = taxonomy.format_preview(self.extract_with(dict(FIXTURE, categories=spec)))
         self.assertIn("Without category: 5 products (2227, 2228, 1004, nokey-0001, 2230)", text)
-        self.assertIn("unknown_handle: ", text)
+        self.assertIn("unknown_handle (1)\n  nope: assign names nope, which is not a product of products.json", text)
 
     def test_plan_shared_reads_it(self):
         t = self.extract_with(FIXTURE)

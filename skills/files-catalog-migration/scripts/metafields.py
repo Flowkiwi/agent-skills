@@ -3,12 +3,13 @@
 The concept is used by `extract.py <dir> metafields` with mappings/metafields.json (see references/metafields.md);
 it writes concepts/metafields.json in the decision format read by plan_shared.py and payload.py, recorded with:
 state.py decide <dir> --key metafields --value-file concepts/metafields.json
-This module imports no other skill module than mapping (extract.py imports it).
+This module imports no other skill module than catalog and mapping (extract.py imports it).
 """
 import json
 import re
 from typing import Dict, List, Optional
 
+import catalog
 import mapping
 from mapping import MappingError, evaluate, is_spec, warn
 
@@ -26,7 +27,7 @@ LIST_TRANSFORMS = (None, "list_json", "list")
 KEYS = frozenset(("version", "concept", "definitions"))
 DEFINITION_KEYS = frozenset(("name", "type", "value", "transform"))
 INTEGER_VALUE = re.compile(r"^-?\d+$")
-NUMBER_VALUE = re.compile(r"^-?\d+([.,]\d+)?$")
+NUMBER_VALUE = re.compile(r"^-?\d+(\.\d+)?$")
 PREVIEW_SAMPLE = 40
 
 
@@ -117,7 +118,8 @@ def check_mapping(m: dict) -> dict:
 
 def typed_value(value, kind: str, key: str, handle: str, row: int, warnings: List[dict], cleaner):
     """The value of a product for a definition: a string, or a list for the list types; None when nothing
-    usable (not a number for a number type: warning, value dropped)."""
+    usable (not a number for a number type: warning, value dropped). Numbers are normalised by
+    mapping.parse_number (decimal comma -> dot)."""
     field = "metafields." + key
     items = [cleaner.final(str(v)) for v in (value if isinstance(value, list) else [value])
              if v is not None and v != ""]
@@ -131,10 +133,13 @@ def typed_value(value, kind: str, key: str, handle: str, row: int, warnings: Lis
     pattern = INTEGER_VALUE if base == "number_integer" else NUMBER_VALUE
     kept = []
     for item in items:
-        if base.startswith("number_") and not pattern.match(item.strip()):
-            warn(warnings, row, handle, "not_a_number", field, "%r is not %s, value dropped" % (
-                item, "an integer" if base == "number_integer" else "a number"))
-            continue
+        if base.startswith("number_"):
+            number = mapping.parse_number(item)
+            if number is None or not pattern.match(number):
+                warn(warnings, row, handle, "not_a_number", field, "%r is not %s, value dropped" % (
+                    item, "an integer" if base == "number_integer" else "a number"))
+                continue
+            item = number
         if base == "single_line_text_field" and len(item) > SINGLE_LINE_MAX:
             warn(warnings, row, handle, "too_long", field, "value of %d characters (over %d), kept whole: use "
                  "multi_line_text_field" % (len(item), SINGLE_LINE_MAX))
@@ -154,14 +159,26 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
         definitions[key] = {"type": d["type"], "name": cleaner.final(d["name"]), "transform": transform}
         for product in products:
             handle = product["handle"]
-            first = (rows.get(handle) or [None])[0]
-            if first is None:
+            product_rows = rows.get(handle) or []
+            if not product_rows:
                 continue
+            first = product_rows[0]
             value = typed_value(evaluate(d["value"], first, sources, warnings, "metafields." + key, handle),
                                 d["type"], key, handle, first.row, warnings, cleaner)
             if value is not None:
                 values.setdefault(handle, {})[key] = value
+            for row in product_rows[1:]:
+                other = typed_value(evaluate(d["value"], row, sources, [], "metafields." + key, handle),
+                                    d["type"], key, handle, row.row, [], cleaner)
+                group_conflict(warnings, row.row, handle, "metafields." + key, other, first.row, value)
     return {"definitions": definitions, "values": values, "warnings": warnings}
+
+
+def group_conflict(warnings: List[dict], row: int, handle: str, field: str, value, kept_row: int, kept) -> None:
+    """A later row of a grouped product giving another non-empty value than the first row (kept)."""
+    if value is not None and value != kept:
+        warn(warnings, row, handle, "group_conflict", field, "row %d gives %r, row %d (kept) gives %r: values come "
+             "from the first row of the product" % (row, value, kept_row, kept))
 
 
 def format_preview(data: dict) -> str:
@@ -178,7 +195,7 @@ def format_preview(data: dict) -> str:
             sample = ", e.g. %s" % (text if len(text) <= PREVIEW_SAMPLE else text[:PREVIEW_SAMPLE - 3] + "...")
         lines.append("  %s '%s' (%s, transform %s): %d products%s" % (
             key, d["name"], d["type"], d.get("transform"), len(found), sample))
-    for warning in data.get("warnings", []):
-        lines.append("%s: %s" % (warning["code"], warning["message"]))
+    if data.get("warnings"):
+        lines += catalog.format_warnings(data["warnings"]).splitlines()
     lines.append("%d metafield definitions" % len(data["definitions"]))
     return "\n".join(lines)
