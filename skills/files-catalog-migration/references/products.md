@@ -51,7 +51,7 @@ One grouped round, in this order, each with a default proposal taken from the in
 
 Ask "Create products as DRAFT (recommended, you publish later), ACTIVE, or from the <column> column?" and record `$S/state.py decide <dir> --key status_mode --value-json '"draft"' --origin developer` (`'"active"'` or `'"source"'`).
 
-With `source`, map `product.status` from that column to `active`, `draft` or `archived` with a `map`, for example `{"from": ["main:statut"], "map": {"en ligne": "active", "hors ligne": "draft"}, "map_ignore_case": true}`. Any other value raises `unknown_status`, blocking until the `map` covers it or `status_map` decides it: `$S/state.py decide <dir> --key status_map --value-json '{"<value in lowercase>": "DRAFT"}' --origin developer`.
+With `source`, map `product.status` from that column to `active`, `draft` or `archived` with a `map`, for example `{"from": ["main:statut"], "map": {"en ligne": "active", "hors ligne": "draft"}, "map_ignore_case": true}`. Any other value raises `unknown_status`, blocking until the `map` covers it or `status_map` decides it: `$S/state.py decide <dir> --key status_map --value-json '{"hors ligne": "DRAFT"}' --origin developer`. Its keys are the source values **in lowercase** (`Hors Ligne` is matched by `hors ligne`): `catalog.py` and `payload.py` both compare the lowercased status.
 
 ## Descriptions
 

@@ -142,7 +142,7 @@ def blocking(data, decisions=None):
             found.append(warning)
         elif code == "unknown_status" and status_source:
             status = statuses.get((warning["handle"], warning["row"]))
-            if status not in status_map:
+            if str(status).lower() not in status_map:
                 found.append(warning)
     return found
 

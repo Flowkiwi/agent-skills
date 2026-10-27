@@ -43,6 +43,11 @@ class CatalogTest(unittest.TestCase):
         self.assertEqual([w["code"] for w in catalog.blocking(data, {"status_mode": "source"})], ["unknown_status"])
         self.assertEqual(catalog.blocking(data, {"status_mode": "source", "status_map": {"en ligne": "ACTIVE"}}), [])
 
+    def test_blocking_status_map_keys_are_lowercase(self):
+        data = {"products": [product("a", status="Hors Ligne")], "warnings": []}
+        catalog.refresh(data)
+        self.assertEqual(catalog.blocking(data, {"status_mode": "source", "status_map": {"hors ligne": "DRAFT"}}), [])
+
     def test_non_sellable(self):
         p = product("a"); p["variants"][0].update(price=None, sku="X", sku_generated=True)
         self.assertTrue(catalog.is_non_sellable(p))
