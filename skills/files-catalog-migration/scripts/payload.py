@@ -5,6 +5,7 @@ The import.key marker (shared `metafield_definition:import.key`) carries the pro
 Usage:
   python3 payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|prices|all]
                     [--dry-run]
+  python3 payload.py <dir> <handle> --update
 
 Workers copy every value verbatim from this output. Invisible or special whitespace characters
 (no-break spaces, zero-width characters, soft hyphens, control characters...) are printed as
@@ -23,6 +24,20 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
 `metafield_definition:<namespace.key>`, value the IRI of shared `metaobject:<type>:<entry handle>`.
 `prices` as written by prices.py build: one sale offer per variant and country, tax from the country or shared
 `tax:<code>:<rate>`, variant `<variant IRI of <sku>>` replaced by the worker with the IRI of that variant.
+
+--update (a later phase, reads diff.json too) prints the operations of one product of diff.json:
+- changed: {"handle", "action": "update", "iri", "product": {"body": <changed fields, new values, null when
+  cleared; attributes and collections whole>} | null, "options": {"create", "values_create", "values_delete",
+  "delete"}, "variants": {"delete", "update", "create"}, "metafields": {"delete", "update", "create"},
+  "prices": {"delete", "update", "create"}}, empty groups left out. Applied in this order: product, options
+  create and values_create, variants delete, update, create, options values_delete and delete, metafields
+  delete, update, create, prices delete (an offer gone with its deleted variant is already deleted), update,
+  create. Existing children are the `created` items of the state by `ref`; a reused child is never written.
+- removed: {"handle", "action": "archive", "iri", "product": {"body": {"status": ARCHIVED}}} or
+  {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
+  the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey.
+A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A SKU still held
+by a created variant of another product is refused until that variant is deleted (diff.json moved, rekeyed).
 """
 
 import argparse
@@ -32,6 +47,8 @@ import os
 import re
 import sys
 import unicodedata
+
+import state as state_module
 
 STATUSES = {"active": "ACTIVE", "draft": "DRAFT", "archived": "ARCHIVED"}
 MARKER_KEY = "metafield_definition:import.key"
@@ -301,6 +318,202 @@ def build(products, state, handle, step="all", placeholders=False):
         payload["collections"] = collection_iris(product, state, placeholders)
     return payload
 
+ARCHIVED = "/api/statuses/ARCHIVED"
+
+
+class _Children:
+    """The child items of a product in the state, by kind and ref."""
+
+    def __init__(self, handle, product):
+        self.handle = handle
+        self.items = {}
+        for item in product["items"]:
+            if item.get("ref") and item.get("status") in ("created", "reused"):
+                self.items.setdefault((item["kind"], item["ref"]), item)
+
+    def _item(self, kind, ref):
+        item = self.items.get((kind, ref))
+        if item is None:
+            raise PayloadError(f"no {kind} item with ref '{ref}' for '{self.handle}': look it up with list_* "
+                               "and record it")
+        return item
+
+    def target(self, kind, ref):
+        """IRI of a child to update or delete; None when it is reused (never written)."""
+        item = self._item(kind, ref)
+        return item["iri"] if item["status"] == "created" else None
+
+    def parent(self, kind, ref):
+        """IRI of a child a new child is created under."""
+        return self._item(kind, ref)["iri"]
+
+    def created(self, kind, prefix):
+        return [(ref, item["iri"]) for (k, ref), item in self.items.items()
+                if k == kind and ref.startswith(prefix) and item["status"] == "created"]
+
+
+def _cleared(name):
+    return [] if name in ("attributes", "collections") else None
+
+
+def _product_update(change, now):
+    fields = change.get("product")
+    if not fields:
+        return None
+    body = now["product"]["body"]
+    return {"body": {name: body.get(name, _cleared(name)) for name in fields}}
+
+
+def _options_update(change, now, children):
+    options = change.get("options", {})
+    current = {o["title"]: o for o in now.get("options") or []}
+    used = {}
+    for variant in now.get("variants") or []:
+        for index, value in enumerate(variant["option_values"]):
+            used.setdefault(index, set()).add(value)
+    group = {"create": [current[title] for title in options.get("added", [])], "values_create": [],
+             "values_delete": [], "delete": []}
+    for title, values in options.get("values_added", {}).items():
+        iri = children.parent("product_option", title)
+        positions = {v["value"]: v["position"] for v in current[title]["values"]}
+        group["values_create"] += [{"option": title, "option_iri": iri, "value": value, "position": positions[value]}
+                                   for value in values]
+    for title, values in options.get("values_removed", {}).items():
+        in_use = used.get(current[title]["position"], set())
+        for value in values:
+            iri = children.target("option_value", f"{title}:{value}") if value not in in_use else None
+            if iri:
+                group["values_delete"].append({"iri": iri, "option": title, "value": value})
+    for title in options.get("removed", []):
+        iri = children.target("product_option", title)
+        if iri is None:
+            continue
+        group["values_delete"] += [{"iri": value_iri, "option": title, "value": ref.split(":", 1)[1]}
+                                   for ref, value_iri in children.created("option_value", f"{title}:")]
+        group["delete"].append({"iri": iri, "title": title})
+    return group
+
+
+def _variants_update(change, now, children):
+    variants = change.get("variants", {})
+    current = {v["sku"]: v for v in now.get("variants") or []}
+    group = {"delete": [], "update": [], "create": [current[sku] for sku in variants.get("added", [])]}
+    for sku in variants.get("removed", []):
+        iri = children.target("variant", sku)
+        if iri:
+            group["delete"].append({"iri": iri, "sku": sku})
+    for sku, fields in variants.get("changed", {}).items():
+        iri = children.target("variant", sku)
+        if iri is None:
+            continue
+        entry = {"iri": iri, "sku": sku, "body": {}}
+        if "barcode" in fields:
+            entry["body"]["barcode"] = current[sku]["barcode"]
+        if "option_values" in fields:
+            entry["option_values"] = list(current[sku]["option_values"])
+        group["update"].append(entry)
+    return group
+
+
+def _keyed_update(change, entries, children, kind, key, field):
+    """delete / update / create of a keyed group (metafields by namespace.key, prices by <sku>:<country>)."""
+    current = {key(e): e for e in entries}
+    group = {"delete": [], "update": [], "create": [current[k] for k in change.get("added", [])]}
+    for ref in change.get("removed", []):
+        iri = children.target(kind, ref)
+        if iri:
+            group["delete"].append({"iri": iri, field: ref})
+    for ref, (old, _) in change.get("changed", {}).items():
+        iri = children.target(kind, ref)
+        if iri:
+            group["update"].append({"iri": iri, field: ref, "body": _changed_body(kind, old, current[ref]["body"])})
+    return group
+
+
+def _changed_body(kind, old, new):
+    if kind == "metafield":
+        return {"value": new.get("value")}
+    return {name: value for name, value in new.items() if (old or {}).get(name) != value}
+
+
+def _non_empty(group):
+    group = {name: entries for name, entries in group.items() if entries}
+    return group or None
+
+
+def _held_elsewhere(state, handle, sku):
+    for other, product in state["products"].items():
+        if other == handle or product["status"] == "deleted":
+            continue
+        if any(i["kind"] == "variant" and i.get("ref") == sku and i.get("status") == "created"
+               for i in product["items"]):
+            return other
+    return None
+
+
+def _changed_plan(products, state, diff_data, handle, entry):
+    change = diff_data["changed"][handle]
+    now = build(products, state, handle)
+    children = _Children(handle, entry)
+    plan = {"handle": handle, "action": "update", "iri": entry["iri"], "product": _product_update(change, now)}
+    groups = {
+        "options": _options_update(change, now, children),
+        "variants": _variants_update(change, now, children),
+        "metafields": _keyed_update(change.get("metafields", {}), now.get("metafields") or [], children,
+                                    "metafield", lambda e: e["key"], "key"),
+        "prices": _keyed_update(change.get("prices", {}), now.get("prices") or [], children,
+                                "sale_offer", lambda e: f"{e['sku']}:{e['country']}", "ref"),
+    }
+    for variant in groups["variants"]["create"]:
+        other = _held_elsewhere(state, handle, variant["sku"])
+        if other:
+            raise PayloadError(f"SKU {variant['sku']} of '{handle}' is still a variant of '{other}': update or "
+                               f"delete '{other}' first (diff.json moved, rekeyed)")
+    for name, group in groups.items():
+        group = _non_empty(group)
+        if group:
+            plan[name] = group
+    return plan
+
+
+def _removed_plan(state, diff_data, handle, entry):
+    phase = state.get("phase", 1)
+    if (diff_data.get("removal") or {}).get(handle) == "delete_rekeyed":
+        if state_module.phase_decision(state, "confirmed_rekey") is None:
+            raise PayloadError(f"rekeyed products need decision confirmed_rekey for phase {phase}")
+        action = "delete"
+    else:
+        decision = state_module.phase_decision(state, "removed_action")
+        action = decision.get("action") if isinstance(decision, dict) else None
+        if action not in ("archive", "delete"):
+            raise PayloadError(f"removed products need decision removed_action for phase {phase}")
+    if action == "delete":
+        return {"handle": handle, "action": "delete", "steps": state_module.undo_plan(state, f"product:{handle}")}
+    if handle in diff_data.get("already_archived", []):
+        raise PayloadError(f"'{handle}' is already archived: nothing to write for removed_action archive")
+    return {"handle": handle, "action": "archive", "iri": entry["iri"], "product": {"body": {"status": ARCHIVED}}}
+
+
+def update_plan(products, state, diff_data, handle):
+    """Ordered update operations of one changed or removed product of diff.json (see the module docstring)."""
+    phase = state.get("phase", 1)
+    if diff_data.get("phase") != phase:
+        raise PayloadError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    entry = state.get("products", {}).get(handle)
+    reused = entry is not None and any(i["kind"] == "product" and i.get("status") == "reused" for i in entry["items"])
+    if handle in diff_data.get("unmanaged", []) or reused:
+        raise PayloadError(f"'{handle}' is unmanaged (reused): never updated")
+    changed = handle in diff_data.get("changed", {})
+    removed = handle in diff_data.get("removed", []) or handle in diff_data.get("already_archived", [])
+    if entry is None or not (changed or removed):
+        raise PayloadError(f"'{handle}' is not in diff.json changed or removed")
+    if handle in (diff_data.get("conflicts") or {}) and not state_module.forced(state, handle):
+        raise PayloadError(f"'{handle}' was modified in Flowkiwi since the last import (see diff.json conflicts): "
+                           "force it with decision force_update")
+    if removed:
+        return _removed_plan(state, diff_data, handle, entry)
+    return _changed_plan(products, state, diff_data, handle, entry)
+
 
 def _read_json(path):
     with open(path, encoding="utf-8") as f:
@@ -313,12 +526,18 @@ def main(argv):
     parser.add_argument("handle")
     parser.add_argument("--step", choices=STEPS, default="all")
     parser.add_argument("--dry-run", action="store_true")
+    parser.add_argument("--update", action="store_true", help="operations of a product of diff.json")
     args = parser.parse_args(argv[1:])
+    if args.update and (args.dry_run or args.step != "all"):
+        parser.error("--update takes no --step and no --dry-run")
 
     try:
         products = _read_json(os.path.join(args.dir, "products.json"))
         state = _read_json(os.path.join(args.dir, "state.json"))
-        payload = build(products, state, args.handle, args.step, args.dry_run)
+        if args.update:
+            payload = update_plan(products, state, _read_json(os.path.join(args.dir, "diff.json")), args.handle)
+        else:
+            payload = build(products, state, args.handle, args.step, args.dry_run)
     except (OSError, ValueError, PayloadError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
