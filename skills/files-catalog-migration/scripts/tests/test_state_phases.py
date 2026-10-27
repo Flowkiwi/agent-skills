@@ -59,6 +59,61 @@ class PhasesTest(unittest.TestCase):
         self.assertEqual(before["product"]["body"]["status"], "/api/statuses/DRAFT")
         self.assertEqual(written["payload"]["variants"], before["variants"])
 
+    def test_module_line_refreshes_only_its_part(self):
+        material = "/api/metafield_definitions/00000000-0000-4000-8000-000000000002"
+        state.merge(self.st, [created_line("2226")], self.products)
+        self.products["products"][0]["title"] = "Titre change sans update"
+        self.products["products"][0]["metafields"] = {"custom.material": "Inox"}
+        state.decide(self.st, "metafields", {"definitions": {"custom.material": {"type": "single_line_text_field"}}},
+                     "developer")
+        state.record_shared(self.st, "metafield_definition:custom.material", material, "created", "metafields")
+        state.merge(self.st, [{"handle": "2226", "module": "metafields", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        p = self.st["products"]["2226"]
+        self.assertEqual(p["status"], "created")
+        self.assertEqual(p["written"]["payload"]["product"]["body"]["title"], "Grille-pain")
+        self.assertEqual(p["written"]["payload"]["metafields"],
+                         [{"key": "custom.material", "shared": "metafield_definition:custom.material",
+                           "body": {"definition": material, "value": "Inox"}}])
+
+    def test_taxonomy_and_metaobjects_lines_keep_the_other_parts(self):
+        material = "/api/metafield_definitions/00000000-0000-4000-8000-000000000002"
+        brand_def = "/api/metafield_definitions/00000000-0000-4000-8000-000000000003"
+        brand = "/api/metaobjects/00000000-0000-4000-8000-000000000004"
+        category = "/api/categories/00000000-0000-4000-8000-000000000005"
+        self.products["products"][0]["metafields"] = {"custom.material": "Inox"}
+        state.decide(self.st, "metafields", {"definitions": {"custom.material": {"type": "single_line_text_field"}}},
+                     "developer")
+        state.record_shared(self.st, "metafield_definition:custom.material", material, "created", "metafields")
+        state.merge(self.st, [created_line("2226")], self.products)
+        self.products["products"][0]["metafields"] = {"custom.material": "Acier"}
+        self.products["products"][0]["title"] = "Titre change sans update"
+        state.decide(self.st, "metaobjects", {"definitions": [{"type": "marque",
+                                                               "reference": {"metafield": "custom.marque"}}],
+                                              "values": {"2226": {"marque": "toastine"}}}, "developer")
+        state.record_shared(self.st, "metafield_definition:custom.marque", brand_def, "created", "metaobjects")
+        state.record_shared(self.st, "metaobject:marque:toastine", brand, "created", "metaobjects")
+        state.decide(self.st, "taxonomy", {"products": {"2226": "Cuisine"}, "attributes": []}, "developer")
+        state.record_shared(self.st, "category:Cuisine", category, "created", "taxonomy")
+        for module in ("metaobjects", "taxonomy"):
+            state.merge(self.st, [{"handle": "2226", "module": module, "status": "created",
+                                   "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        written = self.st["products"]["2226"]["written"]["payload"]
+        self.assertEqual([(m["key"], m["body"]["value"]) for m in written["metafields"]],
+                         [("custom.material", "Inox"), ("custom.marque", brand)])
+        self.assertEqual((written["product"]["body"]["title"], written["product"]["body"]["category"]),
+                         ("Grille-pain", category))
+        state.merge(self.st, [{"handle": "2226", "module": "metafields", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        self.assertEqual([(m["key"], m["body"]["value"]) for m in self.st["products"]["2226"]["written"]["payload"]
+                          ["metafields"]], [("custom.material", "Acier"), ("custom.marque", brand)])
+
+    def test_module_line_without_snapshot_records_none(self):
+        state.merge(self.st, [created_line("2226")])
+        state.merge(self.st, [{"handle": "2226", "module": "prices", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        self.assertNotIn("written", self.st["products"]["2226"])
+
     def test_product_scope(self):
         state.merge(self.st, [created_line("2226"), created_line("2230")], self.products)
         owners = {s["owner"] for s in state.undo_plan(self.st, "product:2226")}

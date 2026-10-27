@@ -308,21 +308,57 @@ def append_result(path, line):
         f.write(json.dumps(line, ensure_ascii=False) + "\n")
 
 
+def _module_part(payload, written, products, state, handle, module):
+    """Refresh in `written` (a copy of the previous payload) only the part a module-only run wrote."""
+    product = next((p for p in products.get("products", []) if p["handle"] == handle), None)
+    if product is None:
+        raise payload.PayloadError(f"handle '{handle}' is not in products.json")
+    if module == "taxonomy":
+        body = written["product"]["body"]
+        body.pop("category", None)
+        body.pop("attributes", None)
+        body.update(payload.taxonomy_fields(product, state))
+    elif module == "collections":
+        body = written["product"]["body"]
+        body.pop("collections", None)
+        iris = payload.collection_iris(product, state)
+        if iris:
+            body["collections"] = iris
+    elif module in ("metafields", "metaobjects"):
+        def is_reference(entry):
+            return state.get("shared", {}).get(entry.get("shared") or "", {}).get("module") == "metaobjects"
+
+        fresh = payload.metafields(product, state)
+        kept = [e for e in written.get("metafields", []) if is_reference(e) == (module == "metafields")]
+        part = [e for e in fresh if is_reference(e) == (module == "metaobjects")]
+        regular, references = (part, kept) if module == "metafields" else (kept, part)
+        written["metafields"] = regular + references
+    elif module == "prices":
+        written["prices"] = payload.sale_offers(product, state)
+    return written
+
+
 def _snapshot(state, products, handle, line):
     """Record what was written for the product: its payload as payload.py prints it now. An archive run only
-    wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json)."""
+    wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json).
+    A module-only run only refreshes its part of the previous snapshot (none recorded: none written)."""
     import payload  # function-level: payload imports state
 
     product = state["products"][handle]
+    previous = (product.get("written") or {}).get("payload")
+    if line["status"] == "archived" or line.get("module"):
+        if previous is None:
+            return
+        written = json.loads(json.dumps(previous))
     if line["status"] == "archived":
-        written = json.loads(json.dumps(product.get("written") or {}))
-        body = (written.get("payload") or {}).get("product", {}).get("body")
-        if body is not None:
-            body["status"] = "/api/statuses/ARCHIVED"
-            product["written"] = {"phase": state.get("phase", 1), "payload": written["payload"]}
+        written.get("product", {}).get("body", {})["status"] = "/api/statuses/ARCHIVED"
+        product["written"] = {"phase": state.get("phase", 1), "payload": written}
         return
     try:
-        built = payload.build(products, state, handle)
+        if line.get("module"):
+            built = _module_part(payload, written, products, state, handle, line["module"])
+        else:
+            built = payload.build(products, state, handle)
     except (payload.PayloadError, KeyError, TypeError, ValueError) as error:
         print(f"warning: no written snapshot for {handle}: {error}", file=sys.stderr)
         return
