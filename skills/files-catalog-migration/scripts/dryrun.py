@@ -3,8 +3,10 @@
 Usage:
   python3 dryrun.py <dir>
 
-Reads products.json, state.json (optional) and mappings/*.json. Exit code 1 when blocking warnings remain or
-the status_mode / data_language decisions are missing.
+Reads products.json, state.json (optional) and mappings/*.json. Exit code 1 when blocking warnings remain, when
+products.json and state.json disagree (a created product whose handle is gone, handles not synced), when
+payload.py would fail for a product to create, or when the status_mode / data_language decisions are missing
+or invalid.
 """
 
 import glob
@@ -14,9 +16,12 @@ import sys
 from typing import List, Tuple
 
 import catalog
+import payload
 
 REQUIRED_DECISIONS = ("status_mode", "data_language")
+STATUS_MODES = ("draft", "active", "source")
 MAX_CANDIDATES = 3
+MAX_PAYLOAD_ERRORS = 10
 SPEC_RESERVED = ("origin", "reason", "question")
 
 
@@ -54,7 +59,8 @@ def agent_choices(directory: str, state: dict) -> List[dict]:
     return found
 
 
-def to_create(data, state):
+def split_products(data, state):
+    """(products to create, number already created) by the state status of their handle."""
     statuses = {handle: entry.get("status") for handle, entry in ((state or {}).get("products") or {}).items()}
     pending, created = [], 0
     for product in data["products"]:
@@ -63,6 +69,49 @@ def to_create(data, state):
             created += 1
         elif status != "skipped":
             pending.append(product)
+    return pending, created
+
+
+def is_live(entry):
+    return entry.get("status") == "created" or any(i.get("status") == "created" for i in entry.get("items") or [])
+
+
+def state_drift(data, state):
+    """Blocking lines when products.json and state.json disagree on the handles."""
+    if not state:
+        return ["  state.json missing: run state.py init"]
+    entries = state.get("products") or {}
+    handles = {p["handle"] for p in data["products"]}
+    gone = sorted(h for h, entry in entries.items() if h not in handles and is_live(entry))
+    unsynced = sorted([h for h in handles if h not in entries or entries[h].get("status") == "skipped"]
+                      + [h for h, entry in entries.items() if h not in handles and not is_live(entry)
+                         and entry.get("status") in ("pending", "failed")])
+    lines = []
+    if gone:
+        lines.append("  identity changed or product removed: %s (created in Flowkiwi, no longer in products.json: "
+                     "undo it first or restore its key)" % catalog._handles_text(gone))
+    if unsynced:
+        lines.append("  products.json and state.json differ, run state.py sync: %s" % catalog._handles_text(unsynced))
+    return lines
+
+
+def payload_errors(products, state):
+    """Builds the payload of every product to create, as the workers will (placeholders for shared IRIs)."""
+    errors = []
+    for product in products:
+        try:
+            payload.build({"products": [product]}, state, product["handle"], placeholders=True)
+        except payload.PayloadError as error:
+            errors.append("    %s: %s" % (product["handle"], error))
+    if not errors:
+        return []
+    more = len(errors) - MAX_PAYLOAD_ERRORS
+    return (["  payload.py fails for %d products:" % len(errors)] + errors[:MAX_PAYLOAD_ERRORS]
+            + (["    and %d more" % more] if more > 0 else []))
+
+
+def to_create(data, state):
+    pending, created = split_products(data, state)
     options = sum(len(p.get("options") or []) for p in pending)
     values = sum(len(o["values"]) for p in pending for o in p.get("options") or [])
     variants = sum(len(p["variants"]) for p in pending)
@@ -100,14 +149,23 @@ def report(directory: str) -> Tuple[str, int]:
 
     blocking = catalog.blocking(data, decisions)
     missing = [key for key in REQUIRED_DECISIONS if not decisions.get(key)]
+    problems = state_drift(data, state)
+    mode = decisions.get("status_mode")
+    if mode and mode not in STATUS_MODES:
+        problems.append("  status_mode %r is not one of %s" % (mode, ", ".join(STATUS_MODES)))
+    elif mode:
+        problems += payload_errors(split_products(data, state)[0], state)
     variants = [v for p in data["products"] for v in p["variants"]]
     images = sum(len(p.get("images") or []) for p in data["products"])
 
     lines = ["Data language: %s" % (decisions.get("data_language") or "(missing)"),
              "Status: %s" % (decisions.get("status_mode") or "(missing)")]
     lines += to_create(data, state)
-    if blocking:
-        lines += ["Blocking:", catalog.format_warnings(blocking)]
+    if blocking or problems:
+        lines.append("Blocking:")
+        if blocking:
+            lines.append(catalog.format_warnings(blocking))
+        lines += problems
     else:
         lines.append("Blocking: none")
     lines.append("Cleaning:")
@@ -121,7 +179,7 @@ def report(directory: str) -> Tuple[str, int]:
     lines += ["Not migrated:", "  %d image URLs kept in products.json" % images]
     for key in missing:
         lines.append("missing decision: %s" % key)
-    return "\n".join(lines), 1 if blocking or missing else 0
+    return "\n".join(lines), 1 if blocking or problems or missing else 0
 
 
 def main(argv):

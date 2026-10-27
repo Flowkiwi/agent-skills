@@ -94,6 +94,50 @@ class DryRunTest(unittest.TestCase):
         self.assertIn("Blocking: none", text)
         self.assertIn("missing decision: status_mode", text)
 
+    def test_created_handle_missing_from_products_blocks(self):
+        self.fill_codes_and_decide_status()
+        state = self.state()
+        state["products"]["nokey-0009"] = dict(state["products"]["2226"], status="created")
+        state["products"]["gone"] = dict(state["products"]["2226"], status="deleted")
+        self.write_state(state)
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertNotIn("Blocking: none", text)
+        self.assertIn("identity changed or product removed: nokey-0009", text)
+        self.assertIn("undo it first or restore its key", text)
+        self.assertNotIn("gone", text)
+
+    def test_handles_out_of_sync_with_the_state_block(self):
+        self.fill_codes_and_decide_status()
+        state = self.state()
+        del state["products"]["2226"]
+        state["products"]["2227"]["status"] = "skipped"
+        state["products"]["old"] = dict(state["products"]["2228"])
+        self.write_state(state)
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("run state.py sync: 2226, 2227, old", text)
+        state_module.sync_products(state, {"products": [{"handle": h} for h in
+                                                         ("2226", "2227", "2228", "1004", "nokey-0001", "2230")]})
+        self.write_state(state)
+        self.assertEqual(dryrun.report(self.dir)[1], 0)
+
+    def test_payload_errors_are_blocking(self):
+        self.fill_codes_and_decide_status()
+        self.decide("modules", ["core", "taxonomy"], "developer")
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("payload.py fails for 6 products", text)
+        self.assertIn("2226: decision 'taxonomy' is missing", text)
+
+    def test_unknown_status_mode_blocks(self):
+        self.fill_codes_and_decide_status()
+        self.decide("status_mode", "published", "developer")
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 1)
+        self.assertIn("status_mode 'published' is not one of draft, active, source", text)
+        self.assertNotIn("payload.py fails", text)
+
     def test_agent_decision_from_state(self):
         self.fill_codes_and_decide_status()
         self.decide("codes", {"prefix": "2"}, "agent", "Codes EAN internes en attendant ceux du client.")
