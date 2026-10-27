@@ -265,14 +265,31 @@ def _compare(kind, old, new):
     return reasons, update
 
 
-def _products_using(state, key, iri):
+def _used_by(state, key):
+    """Shared keys a product item may hold and IRIs its written payload may contain for the key. A metaobject
+    definition is used through its reference metafield definition and its entries."""
+    shared = state.get("shared", {})
+    keys, iris = {key}, {shared.get(key, {}).get("iri")}
+    kind, _, name = key.partition(":")
+    if kind == "metaobject_definition":
+        metaobjects = state.get("decisions", {}).get("metaobjects")
+        for definition in (metaobjects or {}).get("definitions", []) if isinstance(metaobjects, dict) else []:
+            if definition.get("type") == name and (definition.get("reference") or {}).get("metafield"):
+                keys.add(f"metafield_definition:{definition['reference']['metafield']}")
+        iris.update(e.get("iri") for k, e in shared.items() if k.startswith(f"metaobject:{name}:"))
+    return keys, {json.dumps(iri) for iri in iris if iri}
+
+
+def _products_using(state, key):
+    keys, iris = _used_by(state, key)
     handles = []
     for handle, product in state.get("products", {}).items():
         if product.get("status") not in ("created", "archived"):
             continue
-        uses = any(i.get("shared") == key and i.get("status") != "deleted" for i in product.get("items", []))
+        uses = any(i.get("shared") in keys and i.get("status") != "deleted" for i in product.get("items", []))
         written = (product.get("written") or {}).get("payload")
-        if uses or (iri and written is not None and iri in json.dumps(written, ensure_ascii=False)):
+        text = json.dumps(written, ensure_ascii=False) if written is not None else ""
+        if uses or any(iri in text for iri in iris):
             handles.append(handle)
     return sorted(handles)
 
@@ -300,7 +317,7 @@ def changes(state, metafield_columns=None):
             result["unmanaged"].append(key)
         elif reasons:
             result["destructive"].append({"key": key, "reason": "; ".join(reasons),
-                                          "products": _products_using(state, key, recorded.get("iri"))})
+                                          "products": _products_using(state, key)})
         else:
             result["updates"].append({"key": key, "operation": f"update_{kind}", "iri": recorded["iri"],
                                       "module": entry["module"], "body": {f: entry["body"][f] for f in update},

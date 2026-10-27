@@ -176,6 +176,19 @@ class SharedChangesTest(ConceptTestCase):
         found = {c["key"]: c["products"] for c in plan_shared.changes(self.st)["destructive"]}
         self.assertEqual(found[category], ["2227"])
 
+    def test_products_using_a_metaobject_definition(self):
+        entry = "metaobject:marque:%s" % self.st["decisions"]["metaobjects"]["entries"][0]["handle"]
+        reference = "metafield_definition:custom.marque"
+        add_created_product(self.st, "2227", shared=[reference], written={"metafields": [
+            {"key": "custom.marque", "shared": reference,
+             "body": {"definition": fake_iri(reference), "value": fake_iri(entry)}}]})
+        add_created_product(self.st, "2228", written={"metafields": [{"body": {"value": fake_iri(entry)}}]})
+        add_created_product(self.st, "2230", written={"note": fake_iri(entry) + "0"})
+        self.st["decisions"]["metaobjects"]["definitions"][0]["fields"] = []
+        found = plan_shared.changes(self.st)["destructive"]
+        self.assertEqual(found, [{"key": "metaobject_definition:marque", "reason": "field nom removed",
+                                  "products": ["2227", "2228"]}])
+
     def test_reused_and_unknown(self):
         state.record_shared(self.st, "metafield_definition:custom.poids_net", fake_iri("x"), "reused", "metafields",
                             {"type": "number_decimal", "name": "Poids net (kg)"})
