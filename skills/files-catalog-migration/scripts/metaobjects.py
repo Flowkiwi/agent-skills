@@ -195,6 +195,21 @@ def output_definition(d: dict, cleaner) -> dict:
     return result
 
 
+def merge_entry(entry: dict, fields: Dict[str, object], kind: str, handle: str, row: int,
+                warnings: List[dict], reported: set) -> None:
+    """Merges the fields of one product into its entry: the first non-empty value of each field is kept, two
+    different non-empty values are an entry_conflict (reported once per value)."""
+    for key, value in fields.items():
+        if key not in entry["fields"]:
+            entry["fields"][key] = value
+            entry["origins"][key] = handle
+        elif entry["fields"][key] != value and (entry["handle"], key, repr(value)) not in reported:
+            reported.add((entry["handle"], key, repr(value)))
+            warn(warnings, row, handle, "entry_conflict", "metaobjects.%s.%s" % (kind, key),
+                 "entry %s of %s: %s = %r here, %r kept (product %s): map the variants to one spelling" % (
+                     entry["handle"], kind, key, value, entry["fields"][key], entry["origins"][key]))
+
+
 def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, warnings: List[dict]) -> dict:
     """concepts/metaobjects.json from the products of products.json, their rows and the metaobjects mapping."""
     cleaner = next(iter(sources.values())).cleaner
@@ -204,10 +219,9 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
     for d in m["definitions"]:
         kind = d["type"]
         key_field = d.get("entry_key", d["display_name_field"])
-        by_handle = {}  # type: Dict[str, dict]
-        first_product = {}  # type: Dict[str, str]
+        merged = {}  # type: Dict[str, dict]
+        links = []  # type: List[tuple]
         reported = set()
-        handles[kind] = []
         for product in products:
             handle = product["handle"]
             first = (rows.get(handle) or [None])[0]
@@ -228,28 +242,26 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
                 warn(warnings, first.row, handle, "no_handle", "metaobjects.%s.%s" % (kind, key_field),
                      "%r gives no entry handle (no letter or digit)" % (fields[key_field],))
                 continue
-            missing = [f["key"] for f in d["fields"] if f.get("required") and f["key"] not in fields]
+            if entry not in merged:
+                merged[entry] = {"handle": entry, "fields": {}, "origins": {}, "row": first.row, "product": handle}
+            merge_entry(merged[entry], fields, kind, handle, first.row, warnings, reported)
+            links.append((handle, entry))
+        handles[kind] = []
+        for entry, e in merged.items():
+            missing = [f["key"] for f in d["fields"] if f.get("required") and f["key"] not in e["fields"]]
             if missing:
-                warn(warnings, first.row, handle, "missing_required", "metaobjects.%s.%s" % (kind, missing[0]),
-                     "entry %s of %s without the required field(s) %s: not linked to this product" % (
-                         entry, kind, ", ".join(missing)))
+                linked = sum(1 for _, target in links if target == entry)
+                warn(warnings, e["row"], e["product"], "missing_required", "metaobjects.%s.%s" % (kind, missing[0]),
+                     "entry %s of %s has no value for the required field(s) %s in any product: entry dropped, "
+                     "%d product(s) not linked" % (entry, kind, ", ".join(missing), linked))
                 continue
-            if entry not in by_handle:
-                by_handle[entry] = {"definition": kind, "handle": entry, "fields": fields}
-                first_product[entry] = handle
-                entries.append(by_handle[entry])
-                handles[kind].append(entry)
-            else:
-                kept = by_handle[entry]["fields"]
-                for key in sorted(set(kept) | set(fields)):
-                    other = fields.get(key)
-                    if kept.get(key) != other and (entry, key, repr(other)) not in reported:
-                        reported.add((entry, key, repr(other)))
-                        warn(warnings, first.row, handle, "entry_conflict", "metaobjects.%s.%s" % (kind, key),
-                             "entry %s of %s: %s = %r here, %r kept (first product %s): map the variants to one "
-                             "spelling" % (entry, kind, key, other, kept.get(key), first_product[entry]))
-            if "reference" in d:
-                values.setdefault(handle, {})[kind] = entry
+            handles[kind].append(entry)
+            entries.append({"definition": kind, "handle": entry, "fields": {
+                f["key"]: e["fields"][f["key"]] for f in d["fields"] if f["key"] in e["fields"]}})
+        if "reference" in d:
+            for handle, entry in links:
+                if entry in handles[kind]:
+                    values.setdefault(handle, {})[kind] = entry
     return {"reference_validation": m.get("reference_validation", True),
             "definitions": [output_definition(d, cleaner) for d in m["definitions"]],
             "entries": entries, "values": values, "warnings": warnings}

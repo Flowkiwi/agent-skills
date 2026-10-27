@@ -44,6 +44,16 @@ def with_origin_definition(spec):
     return spec
 
 
+def with_matiere(spec, required, matiere_map):
+    """Adds a matiere field to marque; the map blanks some values (demo first rows: 2226 Inox, 2227 Acier
+    inoxydable, 2228 inox, 1004 Plastique, nokey-0001 Inox, 2230 Inox)."""
+    spec = copy.deepcopy(spec)
+    spec["definitions"][0]["fields"].append({"key": "matiere", "name": "Matière", "type": "single_line_text_field",
+                                             "required": required,
+                                             "value": {"from": ["main:matiere"], "map": matiere_map}})
+    return spec
+
+
 class MetaobjectsTest(ConceptTestCase):
     def extract_with(self, m):
         result = super().extract_with(m)
@@ -125,6 +135,56 @@ class MetaobjectsTest(ConceptTestCase):
         self.assertEqual(m["warnings"][1]["handle"], "1004")
         brioche = [e for e in m["entries"] if e["handle"] == "brioche-co"][0]
         self.assertEqual(brioche["fields"], {"nom": "Brioche & Co"})
+
+    def toastine(self, m):
+        return [e for e in m["entries"] if e["handle"] == "toastine"][0]
+
+    def test_sparse_fields_are_merged_in_both_row_orders(self):
+        for required in (False, True):
+            # empty for 2226 (first toastine product), filled for 2227
+            m, codes = self.extract_with(with_matiere(FIXTURE, required, {"Inox": None}))
+            self.assertEqual(codes, [], required)
+            self.assertEqual(self.toastine(m)["fields"], {"nom": "Toastine", "matiere": "Acier inoxydable"})
+            # filled for 2226, empty for 2227
+            m, codes = self.extract_with(with_matiere(FIXTURE, required, {"Acier inoxydable": None}))
+            self.assertEqual(codes, [], required)
+            self.assertEqual(self.toastine(m)["fields"], {"nom": "Toastine", "matiere": "Inox"})
+            for handle in ("2226", "2227", "nokey-0001", "2230"):
+                self.assertEqual(m["values"][handle], {"marque": "toastine"}, (required, handle))
+
+    def test_missing_required_drops_the_entry_and_its_links(self):
+        m, codes = self.extract_with(with_matiere(FIXTURE, True, {"Plastique": None, "Acier inoxydable": "Inox"}))
+        self.assertEqual(codes, ["missing_required"])
+        self.assertEqual(m["warnings"][0]["handle"], "1004")
+        self.assertEqual([e["handle"] for e in m["entries"]], ["toastine", "l-atelier-pain"])
+        self.assertNotIn("1004", m["values"])
+        self.assertEqual(len(m["values"]), 5)
+
+    def test_no_entry_key(self):
+        spec = with_matiere(FIXTURE, False, {"Acier inoxydable": "Inox"})
+        spec["definitions"][0]["fields"][0]["value"]["map"]["brioche & co"] = None
+        m, codes = self.extract_with(spec)
+        self.assertEqual(codes, ["no_entry_key"])
+        self.assertEqual(m["warnings"][0]["handle"], "1004")
+        self.assertNotIn("1004", m["values"])
+        self.assertNotIn("brioche-co", [e["handle"] for e in m["entries"]])
+
+    def test_no_handle(self):
+        spec = copy.deepcopy(FIXTURE)
+        spec["definitions"][0]["fields"][0]["value"]["map"]["brioche & co"] = "&&"
+        m, codes = self.extract_with(spec)
+        self.assertEqual(codes, ["no_handle"])
+        self.assertEqual(m["warnings"][0]["handle"], "1004")
+        self.assertNotIn("1004", m["values"])
+
+    def test_several_values_for_a_single_reference(self):
+        spec = with_origin_definition(FIXTURE)
+        spec["definitions"][1]["fields"][1]["value"] = {"from": ["main:coloris", "main:matiere"], "pick": "all"}
+        m, codes = self.extract_with(spec)
+        self.assertEqual(set(codes), {"list_in_single_field", "entry_conflict"})
+        first = [w for w in m["warnings"] if w["code"] == "list_in_single_field"][0]
+        self.assertEqual((first["handle"], first["field"]), ("2226", "metaobjects.marque.pays"))
+        self.assertEqual(self.toastine(m)["fields"]["pays"], "argente")     # first value kept
 
     def test_cli_prints_the_preview(self):
         self.write_mapping(FIXTURE)
