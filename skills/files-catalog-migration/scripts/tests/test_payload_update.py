@@ -61,6 +61,19 @@ class UpdatePlanTest(unittest.TestCase):
         plan = payload.update_plan(self.products, self.st, self.diff, "2230")
         self.assertEqual(plan["variants"]["delete"], [{"iri": self.variant_iri("2230", "1006"), "sku": "1006"}])
 
+    def test_diff_older_than_products_is_refused(self):
+        product(self.products, "2226")["description_html"] = "<p>Inox brosse</p>"
+        message = "products.json or decisions changed since diff.py: run diff.py and diff.py conflicts again"
+        with self.assertRaisesRegex(payload.PayloadError, "^" + message + "$"):
+            payload.update_plan(self.products, self.st, self.diff, "2226")
+        with self.assertRaisesRegex(ValueError, "^" + message + "$"):
+            state.worklists(self.st, 1, None, False, products=self.products["products"], update=True,
+                            diff_data=self.diff)
+        state.decide(self.st, "status_mode", "active", "developer")
+        self.refresh()
+        self.assertEqual(sorted(payload.update_plan(self.products, self.st, self.diff, "2226")["product"]["body"]),
+                         ["description", "status", "title"])
+
     def test_needs_the_conflicts_step(self):
         self.diff["conflicts_checked"] = False
         with self.assertRaisesRegex(payload.PayloadError, "no conflicts computed since diff.py ran"):
@@ -369,7 +382,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         toaster["variants"].append(dict(toaster["variants"][0], sku="1009", barcode="3601234560098"))
         d = checked(diff.diff(self.st, self.products))
         toaster["variants"].pop()
-        with self.assertRaisesRegex(payload.PayloadError, "variant '1009' of '2226' .* run diff.py again"):
+        with self.assertRaisesRegex(payload.PayloadError, "products.json or decisions changed since diff.py"):
             payload.update_plan(self.products, self.st, d, "2226")
 
     def test_printed_again_after_a_partial_run(self):

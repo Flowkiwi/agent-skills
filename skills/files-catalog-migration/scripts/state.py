@@ -20,6 +20,7 @@ Usage:
 
 import argparse
 import glob
+import hashlib
 import json
 import os
 import re
@@ -131,6 +132,27 @@ def conflicts_unchecked(diff_data):
     if to_write and not diff_data.get("conflicts_checked"):
         return ("diff.json has no conflicts computed since diff.py ran: read the snapshots of this phase into "
                 "tmp/remote/, then run diff.py conflicts <dir>")
+    return None
+
+
+PHASE_DECISIONS = ("force_update", "removed_action", "confirmed_changes", "confirmed_rekey")
+STALE_DIFF = "products.json or decisions changed since diff.py: run diff.py and diff.py conflicts again"
+
+
+def source_fingerprint(state, products):
+    """What diff.py computed the difference from: the products and the decisions, without the phase decisions
+    recorded after diff.py (they never change a payload)."""
+    decisions = {k: v for k, v in (state.get("decisions") or {}).items() if k not in PHASE_DECISIONS}
+    text = json.dumps({"products": products.get("products"), "decisions": decisions}, sort_keys=True,
+                      ensure_ascii=False)
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def diff_stale(state, diff_data, products):
+    """The refusal message when diff.json was computed from another products.json or other decisions: the update
+    run would send only the paths diff.json names while the written snapshot records the payload now."""
+    if diff_data.get("source") != source_fingerprint(state, products):
+        return STALE_DIFF
     return None
 
 
@@ -285,7 +307,7 @@ def _gives_away(product, skus):
                                    for i in product["items"])]
 
 
-def update_selection(state, diff_data, retry_failed=False, skipped=None):
+def update_selection(state, diff_data, retry_failed=False, skipped=None, products=None):
     """The next pass of an update run from diff.json: ("deletions", handles) while rekeyed products are to delete
     or products still hold a SKU moving to another one (they are merged before the receivers are updated or
     created), else ("updates", handles): the changed handles, then the removed ones. Also returns the handles
@@ -293,7 +315,9 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
     conflicts, a deletion whose receiver has an unforced conflict, a failed update without retry_failed, a
     product waiting for a SKU still held by another one, a product receiving a SKU this migration never deletes
     (moved from an unmanaged product or a reused variant), a handle without snapshot (missing_snapshots); handles
-    already done in this phase are left out. Refused while the conflicts step has not run since diff.py."""
+    already done in this phase are left out. Refused while the conflicts step has not run since diff.py, and, with
+    `products` (products.json, or its list of products), when diff.json was computed from other products or
+    decisions."""
     import payload  # function-level: payload imports state
 
     phase = state.get("phase", 1)
@@ -301,6 +325,10 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
         raise ValueError("--update needs diff.json: run diff.py <dir> first")
     if diff_data.get("phase") != phase:
         raise ValueError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    if products is not None:
+        stale = diff_stale(state, diff_data, products if isinstance(products, dict) else {"products": products})
+        if stale:
+            raise ValueError(stale)
     unchecked = conflicts_unchecked(diff_data)
     if unchecked:
         raise ValueError(unchecked)
@@ -432,7 +460,8 @@ def worklists(state, workers, limit, pilot, retry_failed=False, module=None, tit
               products=None, update=False, diff_data=None, report=None):
     """Split handles between workers; handles sharing a title go to the same worker (orphan rule safety).
     `handles` is an explicit selection, `products` (products.json entries) enables the representative pilot.
-    `update` selects the next pass of an update run from `diff_data` (update_selection); its deletions all go
+    `update` selects the next pass of an update run from `diff_data` (update_selection, which also refuses a
+    diff.json computed from other products than `products` when given); its deletions all go
     to one worker (each `state.py deleted` writes the state). `report` (a dict) receives `skipped`
     ({handle: reason}) and, for an update run, `pass`."""
     skipped = {}
@@ -440,7 +469,7 @@ def worklists(state, workers, limit, pilot, retry_failed=False, module=None, tit
     if update:
         if pilot or module:
             raise ValueError("--pilot and --module do not apply to --update")
-        name, candidates, deletes = update_selection(state, diff_data, retry_failed, skipped)
+        name, candidates, deletes = update_selection(state, diff_data, retry_failed, skipped, products)
         if report is not None:
             report["pass"] = name
     elif module:

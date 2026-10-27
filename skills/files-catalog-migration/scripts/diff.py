@@ -50,7 +50,6 @@ diff.json:
 Deleted handles never appear.
 """
 
-import hashlib
 import json
 import os
 import sys
@@ -63,16 +62,8 @@ import verify
 
 PRODUCT_FIELDS = ("title", "description", "tags", "status", "category", "attributes", "collections")
 LIVE = ("created", "archived")
-PHASE_DECISIONS = ("force_update", "removed_action", "confirmed_changes", "confirmed_rekey")
-
-
-def source_fingerprint(state_data, products):
-    """What the difference was computed from: the products and the decisions, without the phase decisions
-    recorded after diff.py (they never change a payload)."""
-    decisions = {k: v for k, v in (state_data.get("decisions") or {}).items() if k not in PHASE_DECISIONS}
-    text = json.dumps({"products": products.get("products"), "decisions": decisions}, sort_keys=True,
-                      ensure_ascii=False)
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+PHASE_DECISIONS = state.PHASE_DECISIONS
+source_fingerprint = state.source_fingerprint
 
 
 def _sorted_list(values):

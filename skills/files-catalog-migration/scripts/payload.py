@@ -37,8 +37,9 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
   {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
   the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey, and a
   blocked rekey (removal archive_blocked) is always archived, whatever removed_action says.
-Refused while diff.json lists products to write and `diff.py conflicts` has not run since the last diff.py
-(conflicts_checked), and for a handle without snapshot (missing_snapshots).
+Refused when diff.json was computed from another products.json or other decisions (its `source`), while diff.json
+lists products to write and `diff.py conflicts` has not run since the last diff.py (conflicts_checked), and for a
+handle without snapshot (missing_snapshots).
 A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A new variant whose
 SKU is still a created variant of another product (diff.json moved, rekeyed, two products swapping SKUs) is left
 out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
@@ -568,6 +569,9 @@ def update_plan(products, state, diff_data, handle):
     phase = state.get("phase", 1)
     if diff_data.get("phase") != phase:
         raise PayloadError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    stale = state_module.diff_stale(state, diff_data, products)
+    if stale:
+        raise PayloadError(stale)
     unchecked = state_module.conflicts_unchecked(diff_data)
     if unchecked:
         raise PayloadError(unchecked)

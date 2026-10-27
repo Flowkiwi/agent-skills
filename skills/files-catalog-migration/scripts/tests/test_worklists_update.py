@@ -335,6 +335,24 @@ class UpdateWorklistsCliTest(unittest.TestCase):
             self.assertIn("modified in Flowkiwi", output["skipped"]["2230"])
             self.assertEqual(read_json(os.path.join(directory, "worklists", "worker-1.json")), ["2226"])
 
+    def test_diff_older_than_products_is_refused(self):
+        products = make_products()
+        st = make_state(products)
+        state.merge(st, [created_line("2226")], products)
+        state.start_phase(st)
+        product(products, "2226")["title"] = "Grille-pain Toastine"
+        with tempfile.TemporaryDirectory() as directory:
+            write_workspace(directory, products, st)
+            self.assertEqual(run_cli(directory, script="diff.py").returncode, 0)
+            write_json(os.path.join(directory, "diff.json"), checked(read_json(os.path.join(directory, "diff.json"))))
+            product(products, "2226")["description_html"] = "<p>Inox brosse</p>"
+            write_json(os.path.join(directory, "products.json"), products)
+            for args, script in ((("worklists", directory, "--update"), "state.py"),
+                                 ((directory, "2226", "--update"), "payload.py")):
+                result = run_cli(*args, script=script)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("products.json or decisions changed since diff.py", result.stderr)
+
     def test_errors(self):
         products = make_products()
         st = make_state(products)
