@@ -318,8 +318,9 @@ class ExtractProductsTest(unittest.TestCase):
         self.assertIn("6 products, 7 variants", result.stdout)
         self.assertIn("quote: ", result.stdout)
         self.assertIn("generated_key (1)", result.stdout)
-        result = subprocess.run([sys.executable, EXTRACT, self.dir, "taxonomy"], capture_output=True, text=True)
+        result = subprocess.run([sys.executable, EXTRACT, self.dir, "brands"], capture_output=True, text=True)
         self.assertEqual(result.returncode, 2)
+        self.assertIn("unknown concept 'brands'", result.stderr)
 
     def test_mapping_error_is_reported(self):
         path = os.path.join(self.dir, "mappings", "products.json")

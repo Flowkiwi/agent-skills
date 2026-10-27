@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "concept": "taxonomy",
+  "categories": {
+    "value": {"from": ["main:categorie"]},
+    "separator": "/",
+    "drop_levels": 1,
+    "depth": null,
+    "map": {
+      "PEM > Grille-pain": "Petit électroménager > Grille-pain",
+      "PEM > Bouilloire": "Petit électroménager > Bouilloire"
+    },
+    "rename": {},
+    "assign": {},
+    "status": "/api/statuses/ACTIVE"
+  },
+  "attributes": []
+}
