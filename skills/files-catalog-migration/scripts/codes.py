@@ -16,7 +16,9 @@ fixes.json: {"skus": {"<handle>": {"<old sku>": "<new sku>"}},
 products.json is built from the source files by extract.py, which applies these fixes itself and
 carries the generated codes of the previous products.json; `fix` is for a one-off check.
 A product matching any skip rule is skipped (all conditions of one rule must match).
-`fields` replace product values after the renames. `generated_keys` is kept by extract.py.
+`fields` replace product values after the renames: `tags` a list of strings, the others a string or null; a
+`description_html` fix sets `description_origin` to "fixed" (null when the fix is null), never regenerated.
+`generated_keys` is kept by extract.py.
 Generated SKUs are uppercased.
 """
 
@@ -86,6 +88,12 @@ def apply_fixes(data, fixes, stats=None):
         unknown = sorted(set(values) - set(FIELD_KEYS))
         if unknown:
             raise ValueError(f"Unknown field(s) {unknown} in fields fix of '{handle}': use {list(FIELD_KEYS)}")
+        for field, value in values.items():
+            if field == "tags":
+                if not isinstance(value, list) or not all(isinstance(tag, str) for tag in value):
+                    raise ValueError(f"fields fix of '{handle}': tags must be a list of strings, got {value!r}")
+            elif value is not None and not isinstance(value, str):
+                raise ValueError(f"fields fix of '{handle}': {field} must be a string or null, got {value!r}")
     skip = set(fixes.get("skip", []))
     rules = fixes.get("skip_rules", [])
     kept = []
@@ -110,7 +118,10 @@ def apply_fixes(data, fixes, stats=None):
         for option in product["options"]:
             if option["name"] in name_renames:
                 option["name"] = name_renames[option["name"]]
-        product.update(copy.deepcopy(fixes.get("fields", {}).get(product["handle"], {})))
+        values = fixes.get("fields", {}).get(product["handle"], {})
+        product.update(copy.deepcopy(values))
+        if "description_html" in values:
+            product["description_origin"] = "fixed" if values["description_html"] else None
     return data
 
 

@@ -48,6 +48,28 @@ class CatalogTest(unittest.TestCase):
         catalog.refresh(data)
         self.assertEqual(catalog.blocking(data, {"status_mode": "source", "status_map": {"hors ligne": "DRAFT"}}), [])
 
+    def test_known_statuses_are_matched_lowercased(self):
+        data = {"products": [product("a", status="Active"), product("b", status="ARCHIVED")], "warnings": []}
+        self.assertEqual([w["code"] for w in catalog.validate(data) if w["code"] == "unknown_status"], [])
+
+    def test_empty_source_status_is_blocking_in_source_mode(self):
+        b = product("b", status="draft")
+        b["variants"][0]["sku"] = "S2"
+        data = {"products": [product("a", status=None), b], "warnings": []}
+        catalog.refresh(data)
+        self.assertEqual(catalog.blocking(data, {"status_mode": "draft"}), [])
+        found = catalog.blocking(data, {"status_mode": "source"})
+        self.assertEqual([(w["code"], w["handle"], w["field"]) for w in found], [("unknown_status", "a", "status")])
+        self.assertIn("status_map", found[0]["message"])
+        self.assertEqual(catalog.blocking(data, {"status_mode": "source", "status_map": {"": "DRAFT"}}), [])
+
+    def test_missing_option_value_and_list_in_single_field_are_blocking(self):
+        for code in ("missing_option_value", "list_in_single_field"):
+            self.assertIn(code, catalog.BLOCKING)
+            data = {"products": [product("a")],
+                    "warnings": [{"row": 3, "handle": "a", "code": code, "message": "m", "stage": "extract"}]}
+            self.assertEqual([w["code"] for w in catalog.blocking(data)], [code])
+
     def test_non_sellable(self):
         p = product("a"); p["variants"][0].update(price=None, sku="X", sku_generated=True)
         self.assertTrue(catalog.is_non_sellable(p))

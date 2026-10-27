@@ -77,8 +77,11 @@ def check_generate(generate_spec, source_ids, where: str) -> None:
     mapping.walk({k: generate_spec[k] for k in ("origin", "reason") if k in generate_spec}, source_ids, where)
 
 
-def render_intro(intro: str, product: dict) -> str:
-    values = {"title": product.get("title") or "", "vendor": product.get("vendor") or ""}
+def render_intro(intro: str, product: dict) -> Optional[str]:
+    """The intro with its placeholders, None when one of them is empty (never `<p> de la marque .</p>`)."""
+    values = {"title": (product.get("title") or "").strip(), "vendor": (product.get("vendor") or "").strip()}
+    if any(not values[name] for name in PLACEHOLDER_RE.findall(intro)):
+        return None
     return PLACEHOLDER_RE.sub(lambda match: values[match.group(1)], intro)
 
 
@@ -95,7 +98,7 @@ def feature_text(value) -> Optional[str]:
 def apply(product: dict, spec: Optional[dict], row, sources, warnings: List[dict], approved: bool) -> dict:
     """Generation step of one product (row: its first source row); returns the product, changed in place."""
     generate_spec = (spec or {}).get("generate")
-    if not generate_spec:
+    if not generate_spec or product.get("description_origin") == "fixed":
         return product
     if not is_poor(product["description_html"], product["title"],
                    generate_spec.get("min_length", DEFAULT_MIN_LENGTH)):
@@ -105,8 +108,10 @@ def apply(product: dict, spec: Optional[dict], row, sources, warnings: List[dict
         field_spec = {k: v for k, v in feature.items() if k not in FEATURE_KEYS}
         value = evaluate(field_spec, row, sources, [], "product.description_html.generate", product["handle"])
         features.append((feature["label"], feature_text(value), feature.get("suffix", "")))
-    generated = generate(render_intro(generate_spec.get("intro", ""), product), features,
-                         generate_spec.get("separator", DEFAULT_SEPARATOR))
+    intro = render_intro(generate_spec.get("intro", ""), product)
+    if intro is None:
+        return product
+    generated = generate(intro, features, generate_spec.get("separator", DEFAULT_SEPARATOR))
     if generated is None:
         return product
     if approved:

@@ -16,6 +16,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import catalog  # noqa: E402
 import clean  # noqa: E402
 import extract  # noqa: E402
+import payload  # noqa: E402
 from demo_files import DEMO_CODES, DEMO_LABELS, DEMO_ROWS, write_demo_csv, write_demo_xlsx, write_xlsx  # noqa: E402
 
 SCRIPTS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
@@ -201,6 +202,111 @@ class ExtractProductsTest(unittest.TestCase):
     def test_fields_fix(self):
         self.write_fixes({"fields": {"2226": {"title": "Grille-pain Toastine"}}})
         self.assertEqual({p["handle"]: p for p in self.run_extract()["products"]}["2226"]["title"], "Grille-pain Toastine")
+
+    def test_lists_rejected_on_single_value_fields(self):
+        base = read_json(FIXTURE)
+        cases = {
+            "pick all title": lambda m: m["product"]["title"].update(pick="all"),
+            "split sku": lambda m: m["variant"]["sku"].update(transform=[{"split": "/"}]),
+            "pick all key": lambda m: m["key"].update(pick="all"),
+            "split group key": lambda m: m["group"]["key"].update(transform=[{"split": ","}]),
+            "split option": lambda m: m["options"][0]["value"].update(transform=[{"split": "/"}]),
+            "list constant": lambda m: m["product"].update(vendor={"value": ["A", "B"]}),
+        }
+        for name, change in cases.items():
+            m = copy.deepcopy(base)
+            change(m)
+            with self.assertRaises(extract.MappingError, msg=name) as error:
+                extract.check_products_mapping(m)
+            self.assertIn("single value", str(error.exception), name)
+        m = copy.deepcopy(base)
+        m["product"]["tags"] = {"from": ["main:categorie"], "transform": [{"split": "/"}]}
+        self.assertIsNone(extract.check_products_mapping(m))
+
+    def test_list_in_single_field_is_reported(self):
+        with open(os.path.join(self.dir, "sources", "rows.csv"), "w", encoding="utf-8", newline="") as f:
+            f.write("Ref;Valeur\r\nA1;T1\r\n")
+        m = {"version": 1, "concept": "products", "sources": {"main": {"file": "rows.csv", "header_rows": 1}},
+             "key": {"from": ["main:Ref"]}, "group": None,
+             "product": {"title": {"from": ["main:Valeur"], "map": {"T1": ["Toaster", "Grille-pain"]}}}, "variant": {}}
+        data = extract.extract_products(self.dir, m, {}, clean.Cleaner())
+        warnings = [w for w in data["warnings"] if w["code"] == "list_in_single_field"]
+        self.assertEqual([(w["row"], w["handle"], w["field"]) for w in warnings], [(2, "a1", "product.title")])
+        self.assertIn("Grille-pain", warnings[0]["message"])
+        self.assertIn(warnings[0], catalog.blocking(data))
+
+    def edit_mapping(self, change):
+        path = os.path.join(self.dir, "mappings", "products.json")
+        m = read_json(path)
+        change(m)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(m, f, ensure_ascii=False)
+
+    def write_rows(self, rows):
+        write_xlsx(os.path.join(self.dir, "sources", "demo-catalogue.xlsx"),
+                   [{"name": "Catalogue", "rows": [DEMO_LABELS, DEMO_CODES] + rows}])
+
+    def test_text_written_after_the_cells_is_cleaned(self):
+        before = dict(self.data["cleaning"])
+        self.edit_mapping(lambda m: m["product"].update(
+            title={"from": ["main:accroche"], "transform": [{"regex": "^(.+?)(?:Noir|Rouge)?$"}]},
+            vendor={"from": ["main:marque"], "map": {"TOASTINE": "Toastine l\u2019original"}}))
+        self.write_fixes({"fields": {"2228": {"title": "Grille-pain \u201cvintage\u201d cr\u00e8me "}},
+                          "option_names": {"*": {"Couleur": "Teinte\u00a0"}}})
+        p = {product["handle"]: product for product in self.run_extract()["products"]}
+        self.assertEqual(p["2230"]["title"], "Grille-pain Duo -")
+        self.assertEqual(p["2226"]["vendor"], "Toastine l'original")
+        self.assertEqual(p["2228"]["title"], 'Grille-pain "vintage" crème')
+        self.assertEqual(p["2230"]["options"][0]["name"], "Teinte")
+        cleaning = read_json(self.products_path)["cleaning"]
+        for rule in ("apostrophe", "quote", "nbsp", "trim"):
+            self.assertGreater(cleaning[rule], before.get(rule, 0), rule)
+        again = self.run_extract()
+        self.assertEqual(again["products"], read_json(self.products_path)["products"])
+        self.assertEqual(again["cleaning"], cleaning)
+
+    def test_blank_option_rename_is_blocking(self):
+        self.write_fixes({"option_names": {"2230": {"Couleur": " "}}})
+        data = self.run_extract()
+        self.assertEqual({p["handle"]: p for p in data["products"]}["2230"]["options"][0]["name"], "")
+        self.assertIn("short_option_name", [w["code"] for w in catalog.blocking(data)])
+
+    def test_description_fields_fix_is_marked_fixed(self):
+        self.write_fixes({"fields": {"2228": {"description_html": "<p>Grille-pain r\u00e9tro, 2 fentes.</p>"},
+                                     "2227": {"description_html": None}}})
+        p = {product["handle"]: product for product in self.run_extract()["products"]}
+        self.assertEqual((p["2228"]["description_origin"], p["2228"]["description_html"]),
+                         ("fixed", "<p>Grille-pain rétro, 2 fentes.</p>"))
+        self.assertNotIn("description_candidate", p["2228"])
+        self.assertIsNone(p["2227"]["description_origin"])
+
+    def test_generated_key_superseded_by_a_real_key(self):
+        rows = copy.deepcopy(DEMO_ROWS)
+        rows[7 - FIRST_DEMO_ROW][DEMO_CODES.index("sku_marchand")] = ("n", "1007")
+        self.write_rows(rows)
+        again = self.run_extract()
+        self.assertIn("1007", [p["handle"] for p in again["products"]])
+        self.assertNotIn("nokey-0001", [p["handle"] for p in again["products"]])
+        superseded = [w for w in again["warnings"] if w["code"] == "generated_key_superseded"]
+        self.assertEqual([(w["row"], w["handle"]) for w in superseded], [(7, "1007")])
+        self.assertIn("nokey-0001", superseded[0]["message"])
+        self.assertIn("1007", superseded[0]["message"])
+        self.assertNotIn(superseded[0], catalog.blocking(again))
+
+    def test_missing_option_value_is_blocking_and_refused_by_payload(self):
+        rows = copy.deepcopy(DEMO_ROWS)
+        rows[9 - FIRST_DEMO_ROW][DEMO_CODES.index("coloris")] = None
+        self.write_rows(rows)
+        again = self.run_extract()
+        duo = {p["handle"]: p for p in again["products"]}["2230"]
+        self.assertEqual([v["option_values"] for v in duo["variants"]], [["Noir"], [None]])
+        missing = [w for w in again["warnings"] if w["code"] == "missing_option_value"]
+        self.assertEqual([(w["row"], w["handle"], w["field"]) for w in missing], [(9, "2230", "options.Couleur")])
+        self.assertIn(missing[0], catalog.blocking(again))
+        state = {"decisions": {"status_mode": "draft"}, "shared": {}}
+        with self.assertRaises(payload.PayloadError) as error:
+            payload.build(again, state, "2230", placeholders=True)
+        self.assertIn("Couleur", str(error.exception))
 
     def test_files_keep_a_normal_mode(self):
         for name in ("products.json", "fixes.json"):

@@ -27,6 +27,8 @@ CONCEPTS = ("products",)
 PRODUCT_FIELDS = ("title", "description_html", "vendor", "tags", "status", "product_category", "images")
 LIST_FIELDS = ("tags", "images")
 VARIANT_FIELDS = ("sku", "barcode", "price", "compare_at_price")
+CLEANED_FIELDS = ("title", "description_html", "description_candidate", "description_source", "vendor",
+                  "product_category", "status")
 GENERATED_KEY = "nokey-%04d"
 GENERATED_KEY_RE = re.compile(r"^nokey-(\d+)$")
 SUSPECT_FACTOR = 100
@@ -81,14 +83,34 @@ def dedupe(values):
     return seen
 
 
+def list_source(spec: dict) -> Optional[str]:
+    if spec.get("pick") == "all":
+        return "pick: all"
+    if any(isinstance(step, dict) and "split" in step for step in spec.get("transform", [])):
+        return "a split transform"
+    if isinstance(spec.get("value"), list):
+        return "a list value"
+    return None
+
+
+def check_single(spec: dict, where: str) -> None:
+    found = list_source(spec)
+    if found:
+        raise MappingError("%s: %s gives a list but this field holds a single value (use pick: first or join)" % (
+            where, found))
+
+
 def check_products_mapping(m: dict) -> None:
     if m.get("concept") != "products":
         raise MappingError("concept must be 'products', got %r" % (m.get("concept"),))
     if not is_spec(m.get("key")):
         raise MappingError("key: a field spec is required (the client reference column(s) identifying a row)")
+    check_single(m["key"], "key")
     group = m.get("group")
     if group is not None and not (isinstance(group, dict) and is_spec(group.get("key"))):
         raise MappingError("group: null or {\"key\": <field spec>}")
+    if group is not None:
+        check_single(group["key"], "group.key")
     for section, fields in (("product", PRODUCT_FIELDS), ("variant", VARIANT_FIELDS)):
         specs = m.get(section) or {}
         if not isinstance(specs, dict):
@@ -98,6 +120,8 @@ def check_products_mapping(m: dict) -> None:
                 raise MappingError("%s.%s: unknown field (valid: %s)" % (section, name, ", ".join(fields)))
             if not is_spec(spec):
                 raise MappingError("%s.%s: a field spec is required" % (section, name))
+            if name not in LIST_FIELDS:
+                check_single(spec, "%s.%s" % (section, name))
             if "generate" in spec:
                 if (section, name) != ("product", "description_html"):
                     raise MappingError("%s.%s: generate is only valid on product.description_html" % (section, name))
@@ -107,6 +131,8 @@ def check_products_mapping(m: dict) -> None:
             isinstance(o, dict) and isinstance(o.get("name"), str) and o["name"] and is_spec(o.get("value"))
             for o in options):
         raise MappingError("options: a list of {\"name\": \"<option name>\", \"value\": <field spec>}")
+    for i, option in enumerate(options):
+        check_single(option["value"], "options[%d].value" % i)
 
 
 def assign_generated_keys(keyless: List[Tuple[int, Optional[str]]], titles, entries: List[dict],
@@ -155,6 +181,18 @@ class ProductExtraction:
             self.numeric.setdefault(name, []).append((row.row, handle, value))
         return value
 
+    def single(self, value, row, handle, name):
+        """A single-value field never silently keeps the first item of a list (a map target can be one)."""
+        if isinstance(value, list) and len(value) > 1:
+            warn(self.warnings, row.row, handle, "list_in_single_field", name,
+                 "%d values %r for a single-value field (first one kept): give it a single value in the mapping" % (
+                     len(value), value))
+        return scalar(value)
+
+    def value(self, field, spec, row, name, handle, record=True):
+        value = self.field(spec, row, name, handle, record)
+        return normalize(field, value) if field in LIST_FIELDS else self.single(value, row, handle, name)
+
     def identities(self, rows, fixes):
         group = self.mapping.get("group")
         group_spec = identity_spec(group["key"]) if group else None
@@ -162,14 +200,21 @@ class ProductExtraction:
         title_spec = (self.mapping.get("product") or {}).get("title")
         idents, titles = [], []
         for row in rows:
-            ident = usable_key(evaluate(group_spec, row, self.sources, self.warnings, "group.key")) if group_spec else None
+            ident = None
+            if group_spec:
+                ident = usable_key(self.single(evaluate(group_spec, row, self.sources, self.warnings, "group.key"),
+                                               row, None, "group.key"))
             if ident is None:
-                ident = usable_key(evaluate(key_spec, row, self.sources, self.warnings, "key"))
+                ident = usable_key(self.single(evaluate(key_spec, row, self.sources, self.warnings, "key"),
+                                               row, None, "key"))
             idents.append(ident)
             titles.append(scalar(evaluate(title_spec, row, self.sources, [], "product.title")) if title_spec else None)
         keyless = [(row.row, title) for row, ident, title in zip(rows, idents, titles) if ident is None]
-        assigned, new = assign_generated_keys(keyless, set(titles), fixes.get("generated_keys") or [],
-                                              mapping.main_source_id(self.mapping))
+        keyed = [(row, ident, title) for row, ident, title in zip(rows, idents, titles) if ident is not None]
+        entries = fixes.get("generated_keys") or []
+        source_id = mapping.main_source_id(self.mapping)
+        assigned, new = assign_generated_keys(keyless, set(titles), entries, source_id)
+        self.superseded(entries, source_id, set(assigned.values()), keyed, set(titles))
         new_keys = {entry["key"] for entry in new}
         for i, row in enumerate(rows):
             if idents[i] is None:
@@ -178,6 +223,26 @@ class ProductExtraction:
                      "no key in this row: generated key %s (%s)" % (
                          key, "new, written to fixes.json" if key in new_keys else "kept from fixes.json"))
         return idents, new
+
+    def superseded(self, entries, source_id, used, keyed, titles):
+        """Warns when an unused generated key of fixes.json matches a row that now has a real key."""
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("source") != source_id or entry.get("key") in used:
+                continue
+            title = entry.get("title")
+            match = None
+            if title is not None:
+                match = next((k for k in keyed if k[2] == title and k[0].row == entry.get("row")), None) or next(
+                    (k for k in keyed if k[2] == title), None)
+            if match is None and title not in titles:
+                match = next((k for k in keyed if k[0].row == entry.get("row")), None)
+            if match is None:
+                continue
+            row, ident, _ = match
+            warn(self.warnings, row.row, slugify(ident), "generated_key_superseded", "key",
+                 "the row of generated key %s (row %s, title %r) now has the key %s: product %s replaces %s, "
+                 "undo %s first if it was created" % (entry.get("key"), entry.get("row"), title, ident,
+                                                       slugify(ident), entry.get("key"), entry.get("key")))
 
     def groups(self, rows, idents):
         grouping = bool(self.mapping.get("group"))
@@ -220,9 +285,9 @@ class ProductExtraction:
                 values[field] = normalize(field, None)
                 continue
             name = "product." + field
-            values[field] = normalize(field, self.field(spec, first, name, handle))
+            values[field] = self.value(field, spec, first, name, handle)
             for row in group_rows[1:]:
-                other = normalize(field, self.field(spec, row, name, handle, record=False))
+                other = self.value(field, spec, row, name, handle, record=False)
                 if field == "images":
                     values[field] = dedupe(values[field] + other)
                 elif other not in (None, []) and other != values[field]:
@@ -236,7 +301,8 @@ class ProductExtraction:
             return options, per_row
         for option in self.mapping.get("options") or []:
             name = "options." + option["name"]
-            found = [scalar(self.field(option["value"], row, name, handle)) for row in group_rows]
+            found = [self.single(self.field(option["value"], row, name, handle), row, handle, name)
+                     for row in group_rows]
             if all(value is None for value in found):
                 continue
             for row, value in zip(group_rows, found):
@@ -250,7 +316,7 @@ class ProductExtraction:
 
     def variant(self, row, handle, option_values):
         specs = self.mapping.get("variant") or {}
-        values = {field: scalar(self.field(specs[field], row, "variant." + field, handle)) if field in specs else None
+        values = {field: self.value(field, specs[field], row, "variant." + field, handle) if field in specs else None
                   for field in VARIANT_FIELDS}
         return {"sku": values["sku"], "sku_generated": False, "barcode": values["barcode"],
                 "barcode_generated": False, "option_values": option_values, "price": values["price"],
@@ -291,6 +357,30 @@ class ProductExtraction:
                              value, SUSPECT_FACTOR, mapping.plain_decimal(median), name))
 
 
+def clean_products(products: List[dict], cleaner: clean.Cleaner) -> None:
+    """Cleans again every text value that reaches Flowkiwi: map targets, transform results, fixes and generated
+    descriptions were written after the cells were cleaned. Cleaning is idempotent: cell values do not change."""
+    def text(value):
+        return (cleaner.final(value) or None) if isinstance(value, str) else value
+
+    def texts(values):
+        return dedupe([v for v in (text(value) for value in values) if v is not None])
+
+    for product in products:
+        for field in CLEANED_FIELDS:
+            if field in product:
+                product[field] = text(product[field])
+        for field in LIST_FIELDS:
+            product[field] = texts(product.get(field) or [])
+        for option in product.get("options") or []:
+            option["name"] = text(option["name"]) or ""
+            option["values"] = texts(option["values"])
+        for variant in product["variants"]:
+            for field in VARIANT_FIELDS:
+                variant[field] = text(variant[field])
+            variant["option_values"] = [text(value) for value in variant["option_values"]]
+
+
 def extract_products(directory: str, m: dict, fixes: dict, cleaner: clean.Cleaner, state: Optional[dict] = None,
                      previous: Optional[dict] = None) -> dict:
     """products.json data from the source files. New generated keys are appended to fixes["generated_keys"]."""
@@ -307,22 +397,24 @@ def extract_products(directory: str, m: dict, fixes: dict, cleaner: clean.Cleane
     products = [extraction.product(ident, group_rows) for ident, group_rows in groups.items()]
     extraction.suspect_units()
 
-    decision = ((state or {}).get("decisions") or {}).get("description_generation")
-    approved = isinstance(decision, dict) and decision.get("approved") is True
-    description_spec = (m.get("product") or {}).get("description_html")
-    first_rows = {slugify(ident): group_rows[0] for ident, group_rows in groups.items()}
-    products = [describe.apply(product, description_spec, first_rows[product["handle"]], sources, warnings,
-                                approved) for product in products]
-
     data = {
-        "version": 1, "products": products, "warnings": warnings,
-        "cleaning": {rule: cleaner.counts[rule] for rule in clean.VALID_IDS if rule in cleaner.counts},
+        "version": 1, "products": products, "warnings": warnings, "cleaning": {},
         "sources": {source_id: {"file": m["sources"][source_id]["file"], "sheet": source.table.name,
                                  "sha256": sha256(source.path)}
                     for source_id, source in sources.items()},
         "metafield_columns": {},
     }
+    # fields fixes first: a fixed title or vendor is the one a generated description states
     codes.apply_fixes(data, fixes)
+    clean_products(data["products"], cleaner)
+    decision = ((state or {}).get("decisions") or {}).get("description_generation")
+    approved = isinstance(decision, dict) and decision.get("approved") is True
+    description_spec = (m.get("product") or {}).get("description_html")
+    first_rows = {slugify(ident): group_rows[0] for ident, group_rows in groups.items()}
+    for product in data["products"]:
+        describe.apply(product, description_spec, first_rows[product["handle"]], sources, warnings, approved)
+    clean_products(data["products"], cleaner)
+    data["cleaning"] = {rule: cleaner.counts[rule] for rule in clean.VALID_IDS if rule in cleaner.counts}
     if previous:
         codes.carry(data, previous)
     return catalog.refresh(data)

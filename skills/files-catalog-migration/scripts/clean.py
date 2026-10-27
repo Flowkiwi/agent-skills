@@ -141,6 +141,11 @@ class Cleaner:
     def text(self, value: Optional[str]) -> Optional[str]:
         return clean_text(value, self.counts, self.disabled, self.replacements)
 
+    def final(self, value: Optional[str]) -> Optional[str]:
+        """The rules again on text written after the cells were read (counted), without the replacements, so
+        that a cleaned value never changes: cleaning stays idempotent."""
+        return clean_text(value, self.counts, self.disabled + (CUSTOM,), None)
+
 
 def load_config(directory: str) -> dict:
     path = os.path.join(directory, "mappings", "cleaning.json")

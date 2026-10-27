@@ -80,6 +80,21 @@ class PayloadTest(unittest.TestCase):
         self.assertEqual(payload.build(self.products, st, "2226")["product"]["body"]["status"],
                          "/api/statuses/DRAFT")
 
+    def test_empty_source_status_uses_the_empty_key(self):
+        st = make_state(self.products, mode="source")
+        with self.assertRaises(payload.PayloadError):
+            payload.build(self.products, st, "2226")
+        state.decide(st, "status_map", {"": "DRAFT"}, "developer")
+        self.assertEqual(payload.build(self.products, st, "2226")["product"]["body"]["status"],
+                         "/api/statuses/DRAFT")
+
+    def test_missing_option_value_is_refused(self):
+        self.products["products"][1]["variants"][1]["option_values"] = [None]
+        with self.assertRaises(payload.PayloadError) as error:
+            payload.build(self.products, self.state, "2230")
+        self.assertIn("variant 2", str(error.exception))
+        self.assertIn("Couleur", str(error.exception))
+
     def test_missing_status_mode_is_an_error(self):
         del self.state["decisions"]["status_mode"]
         with self.assertRaises(payload.PayloadError):

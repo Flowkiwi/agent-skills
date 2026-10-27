@@ -139,6 +139,13 @@ def options(product):
 
 
 def variants(product):
+    names = [option["name"] for option in product.get("options") or []]
+    for index, v in enumerate(product["variants"], start=1):
+        missing = [names[i] if i < len(names) else str(i + 1)
+                   for i, value in enumerate(v["option_values"]) if value in (None, "")]
+        if missing:
+            raise PayloadError(f"variant {index} has no value for option(s) {', '.join(missing)} "
+                               "(missing_option_value): settle it in the mapping")
     return [
         {"sku": v["sku"], "barcode": v["barcode"], "option_values": list(v["option_values"])}
         for v in product["variants"]

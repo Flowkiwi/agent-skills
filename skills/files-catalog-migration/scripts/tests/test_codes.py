@@ -138,6 +138,15 @@ class CodesTest(unittest.TestCase):
         with self.assertRaises(ValueError):
             codes.apply_fixes(self.data, {"fields": {"mug": {"handle": "cup"}}})
 
+    def test_fields_fix_value_types(self):
+        for value in ({"tags": "a,b"}, {"tags": ["a", 2]}, {"title": 12}, {"status": ["draft"]}):
+            with self.assertRaises(ValueError, msg=value) as error:
+                codes.apply_fixes(copy.deepcopy(self.data), {"fields": {"cap": value}})
+            self.assertIn("cap", str(error.exception))
+        codes.apply_fixes(self.data, {"fields": {"cap": {"tags": [], "vendor": None, "description_html": "<p>x</p>"}}})
+        cap = by_handle(self.data, "cap")
+        self.assertEqual((cap["tags"], cap["vendor"], cap["description_origin"]), ([], None, "fixed"))
+
     def test_carry_is_public(self):
         previous = copy.deepcopy(self.data)
         codes.fill(previous, "2", 1, "{handle}-{index}")

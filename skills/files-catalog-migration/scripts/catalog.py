@@ -16,7 +16,8 @@ MIN_OPTION_NAME_LENGTH = 3
 LIMITS = {"title": 255, "handle": 255}
 BLOCKING = (
     "duplicate_key", "duplicate_handle", "missing_title", "too_long", "duplicate_sku",
-    "missing_sku", "missing_barcode", "short_option_name", "duplicate_option_values",
+    "missing_sku", "missing_barcode", "short_option_name", "duplicate_option_values", "missing_option_value",
+    "list_in_single_field",
 )
 WARNING_ORDER = ("non_sellable",)
 MAX_LISTED_HANDLES = 10
@@ -95,7 +96,7 @@ def validate(data):
             _warn(warnings, row, handle, "non_sellable",
                   "No variant price and no SKU from the sources: probably not a product (note, sample)")
         status = product.get("status")
-        if status is not None and status not in KNOWN_STATUSES:
+        if status is not None and str(status).lower() not in KNOWN_STATUSES:
             _warn(warnings, row, handle, "unknown_status",
                   f"Status '{status}' is not one of {', '.join(KNOWN_STATUSES)}", "status")
         for option in product.get("options") or []:
@@ -129,6 +130,7 @@ def refresh(data):
 
 
 def blocking(data, decisions=None):
+    """Blocking warnings; with status_mode source, an empty status is one too unless status_map[""] maps it."""
     decisions = decisions or {}
     status_source = decisions.get("status_mode") == "source"
     status_map = decisions.get("status_map") or {}
@@ -144,6 +146,11 @@ def blocking(data, decisions=None):
             status = statuses.get((warning["handle"], warning["row"]))
             if str(status).lower() not in status_map:
                 found.append(warning)
+    if status_source and "" not in status_map:
+        for product in data["products"]:
+            if not str(product.get("status") or "").strip():
+                _warn(found, product["row"], product["handle"], "unknown_status",
+                      "No source status: map the empty value in the mapping or record status_map[\"\"]", "status")
     return found
 
 

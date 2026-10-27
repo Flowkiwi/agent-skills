@@ -121,6 +121,26 @@ class DescribeTest(unittest.TestCase):
         self.assertNotIn("description_candidate", p)
         self.assertNotIn("2228", [w["handle"] for w in self.data["warnings"] if w["code"] == "poor_description"])
 
+    def write_fixes(self, fixes):
+        with open(os.path.join(self.dir, "fixes.json"), "w", encoding="utf-8") as f:
+            json.dump(fixes, f, ensure_ascii=False)
+
+    def test_intro_uses_the_fixed_title(self):
+        self.write_fixes({"fields": {"2227": {"title": "Grille-pain 4 fentes Stop Eject"}}})
+        self.assertEqual(self.extract()["2227"]["description_candidate"],
+                         "<p>Grille-pain 4 fentes Stop Eject</p><ul><li>Matière : Acier inoxydable</li>"
+                         "<li>Coloris : Noir</li></ul>")
+
+    def test_empty_intro_placeholder_means_no_candidate(self):
+        self.edit_generate(intro="{title} de la marque {vendor}.")
+        self.write_fixes({"fields": {"2228": {"vendor": None}}})
+        p = self.extract()
+        self.assertNotIn("description_candidate", p["2228"])
+        self.assertEqual(p["2228"]["description_html"], "Grille-pain vintage crème")
+        self.assertTrue(p["2227"]["description_candidate"].startswith(
+            '<p>Grille-pain 4 fentes "Stop Eject" de la marque Toastine.</p>'))
+        self.assertEqual(describe.render_intro("{title} de {vendor}", {"title": "T", "vendor": " "}), None)
+
     def test_without_generate_nothing_changes(self):
         path = os.path.join(self.dir, "mappings", "products.json")
         with open(path, encoding="utf-8") as f:
