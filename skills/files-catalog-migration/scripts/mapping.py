@@ -20,6 +20,11 @@ TRANSFORMS = ("decimal", "integer", "boolean", "split", "scale_above", "regex", 
 ARGUMENT_TRANSFORMS = ("boolean", "split", "scale_above", "regex")
 PICKS = ("first", "all", "join")
 CONFLICTS = ("warn", "ignore")
+DOC_KEYS = frozenset(("origin", "reason", "question"))
+SPEC_KEYS = frozenset(("from", "value", "pick", "sep", "map", "map_ignore_case", "transform", "default",
+                       "conflicts")) | DOC_KEYS
+# keys a concept accepts on top of SPEC_KEYS; their content is checked by the concept extractor
+CONCEPT_SPEC_KEYS = {"products": frozenset(("generate",))}
 STAGE = "extract"
 
 NUMBER_RE = re.compile(r"^-?\d+(\.\d+)?$")
@@ -98,9 +103,16 @@ def check_step(step: Any, where: str) -> None:
         raise MappingError("%s: bad argument %r for transform '%s' (expected %s)" % (where, arg, name, expected))
 
 
-def check_spec(spec: dict, source_ids, where: str) -> None:
+def check_spec(spec: dict, source_ids, where: str, extra_keys=()) -> None:
     if "from" in spec and "value" in spec:
         raise MappingError("%s: a field spec has 'from' or 'value', not both" % where)
+    if "from" not in spec and "value" not in spec:
+        raise MappingError("%s: a field spec needs 'from' or 'value'" % where)
+    allowed = SPEC_KEYS | frozenset(extra_keys)
+    for key in spec:
+        if key not in allowed:
+            raise MappingError("%s: unknown key '%s' in a field spec (valid: %s)" % (
+                where, key, ", ".join(sorted(allowed))))
     if "from" in spec:
         refs = spec["from"]
         if not isinstance(refs, list) or not refs:
@@ -122,7 +134,7 @@ def check_spec(spec: dict, source_ids, where: str) -> None:
         check_step(step, where)
 
 
-def walk(node: Any, source_ids, where: str) -> None:
+def walk(node: Any, source_ids, where: str, extra_keys=()) -> None:
     if isinstance(node, dict):
         if "origin" in node and node["origin"] not in ORIGINS:
             raise MappingError("%s: origin must be one of %s, got %r" % (where, ", ".join(ORIGINS), node["origin"]))
@@ -130,20 +142,25 @@ def walk(node: Any, source_ids, where: str) -> None:
             if key in node and node[key] is not None and not isinstance(node[key], str):
                 raise MappingError("%s: %s must be a string" % (where, key))
         if is_spec(node):
-            check_spec(node, source_ids, where)
+            check_spec(node, source_ids, where, extra_keys)
             return
+        spec_only = sorted(k for k in node if k in SPEC_KEYS - DOC_KEYS - {"from", "value"})
+        if spec_only:
+            raise MappingError("%s: a field spec needs 'from' or a non-object 'value' (found %s)" % (
+                where or "mapping", ", ".join(spec_only)))
         for key, value in node.items():
-            walk(value, source_ids, "%s.%s" % (where, key) if where else key)
+            walk(value, source_ids, "%s.%s" % (where, key) if where else key, extra_keys)
     elif isinstance(node, list):
         for i, value in enumerate(node):
-            walk(value, source_ids, "%s[%d]" % (where, i))
+            walk(value, source_ids, "%s[%d]" % (where, i), extra_keys)
 
 
 def main_source_id(mapping: dict) -> str:
     return [sid for sid, source in mapping["sources"].items() if "join" not in source][0]
 
 
-def validate_mapping(mapping: dict) -> dict:
+def validate_mapping(mapping: dict, extra_keys=()) -> dict:
+    """Checks the mapping; field specs may hold SPEC_KEYS, the CONCEPT_SPEC_KEYS of the concept and extra_keys."""
     if not isinstance(mapping, dict) or mapping.get("version") != 1:
         raise MappingError("mapping version must be 1")
     if not isinstance(mapping.get("concept"), str) or not mapping["concept"]:
@@ -175,7 +192,8 @@ def validate_mapping(mapping: dict) -> dict:
                 raise MappingError("%s: join.column must be a column of '%s'" % (where, sid))
             if check_ref(join.get("to"), source_ids, where + ".join.to") != mains[0]:
                 raise MappingError("%s: join.to must be a column of the main source '%s'" % (where, mains[0]))
-    walk({k: v for k, v in mapping.items() if k not in ("version", "concept", "sources")}, source_ids, "")
+    extra = frozenset(extra_keys) | CONCEPT_SPEC_KEYS.get(mapping["concept"], frozenset())
+    walk({k: v for k, v in mapping.items() if k not in ("version", "concept", "sources")}, source_ids, "", extra)
     return mapping
 
 

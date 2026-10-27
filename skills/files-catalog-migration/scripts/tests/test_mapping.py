@@ -270,6 +270,33 @@ class ValidateTest(unittest.TestCase):
         self.assertRejected(key={"from": ["main:ean"], "value": "x"})
         self.assertRejected(group={"key": {"from": ["main:ref_com"]}, "origin": "guess"})
 
+    def test_unknown_spec_key_is_named(self):
+        for typo in ("transfrom", "map_ignore_cases"):
+            with self.assertRaises(mapping.MappingError) as error:
+                mapping.validate_mapping(dict(MAIN_AND_PRICES, key={"from": ["main:ean"], typo: True}))
+            self.assertIn("'%s'" % typo, str(error.exception))
+            self.assertIn("key", str(error.exception))
+
+    def test_spec_holds_exactly_one_of_from_and_value(self):
+        self.assertRejected(key={"map": {"a": "b"}, "transform": ["decimal"]})
+        self.assertRejected(key={"value": {"nested": 1}, "default": "x"})
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec({"pick": "first"}, ["main"], "x")
+
+    def test_spec_keys_are_extensible(self):
+        self.assertIn("map_ignore_case", mapping.SPEC_KEYS)
+        spec = {"from": ["main:ean"], "label": "EAN"}
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec(spec, ["main"], "x")
+        mapping.check_spec(spec, ["main"], "x", extra_keys=("label",))
+        self.assertRejected(key=spec)
+        mapping.validate_mapping(dict(MAIN_AND_PRICES, key=spec), extra_keys=("label",))
+        self.assertIn("generate", mapping.CONCEPT_SPEC_KEYS["products"])
+        generate = {"from": ["main:descriptif"], "generate": {"features": []}}
+        mapping.validate_mapping(dict(MAIN_AND_PRICES, product={"description_html": generate}))
+        with self.assertRaises(mapping.MappingError):
+            mapping.validate_mapping(dict(MAIN_AND_PRICES, concept="taxonomy", key=generate))
+
     def test_options_entries_hold_specs(self):
         options = [{"name": "Couleur", "value": {"from": ["main:coloris"], "transform": ["nope"]}}]
         self.assertRejected(options=options)
