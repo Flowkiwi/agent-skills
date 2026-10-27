@@ -2,6 +2,7 @@
 
 Usage:
   python3 plan_shared.py <dir> [--ready]
+  python3 plan_shared.py <dir> --changes
 
 Covers the core import.key marker definition, then (when decided) categories parents first, attribute definitions,
 attribute options, collections parents first, metaobject definitions, metaobject entries (definition order, then
@@ -12,15 +13,22 @@ with the IRI to detect later drift.
 A body referencing a shared element not recorded yet holds a `<key IRI>` placeholder and lists it
 in `depends_on`; --ready prints only the entries whose dependencies are all recorded. Other modules'
 shared elements (countries, suppliers, channels) follow their references.
+
+--changes compares the recorded specs with the current plan (a later phase): destructive changes (with the
+created products that use them), updates of elements created by this migration, `unmanaged` keys (reused,
+never modified) and `unknown` ones (recorded without spec). Exit 1 while a destructive key is not in the
+decision `confirmed_changes` of the current phase (`{"phase": <n>, "keys": [...]}`).
 """
 
 import argparse
+import copy
 import json
 import os
 import sys
 from decimal import ROUND_HALF_UP, Decimal
 
 from payload import MARKER_KEY, PayloadError, dumps, shared_iri
+from state import phase_decision
 
 OWNER_TYPE = "/api/metafield_owner_types/products"
 TYPE_PREFIX = "/api/metafield_definition_types/"
@@ -75,7 +83,7 @@ def marker_labels(decisions):
     return MARKER_LABELS.get(language, MARKER_LABELS["en"])
 
 
-def plan(state, metafield_columns=None):
+def plan(state, metafield_columns=None, include_recorded=False):
     decisions = state.get("decisions", {})
     entries = []
 
@@ -151,12 +159,14 @@ def plan(state, metafield_columns=None):
                 if field.get("target"):
                     body["validations"] = _metaobject_validation(state, field["target"], depends_on)
                 fields.append(body)
+            spec = {"name": definition["name"], "fields": {f["key"]: f["type"] for f in definition["fields"]}}
+            targets = {f["key"]: f["target"] for f in definition["fields"] if f.get("target")}
+            if targets:
+                spec["targets"] = targets
             add(f"metaobject_definition:{kind}", "metaobjects", "create_metaobject_definition",
                 f"list_metaobject_definitions: type '{kind}'",
                 {"type": kind, "name": definition["name"], "displayNameField": definition["displayNameField"],
-                 "fieldDefinitions": fields},
-                {"name": definition["name"], "fields": {f["key"]: f["type"] for f in definition["fields"]}},
-                depends_on)
+                 "fieldDefinitions": fields}, spec, depends_on)
         for definition in definitions:
             kind = definition["type"]
             for entry in metaobjects.get("entries", []):
@@ -171,7 +181,7 @@ def plan(state, metafield_columns=None):
                     f"list_metaobjects: definition {definition_iri}, handle '{entry['handle']}'",
                     {"definition": definition_iri, "handle": entry["handle"], "fields": fields,
                      "status": definition["status"]},
-                    {"fields": entry["fields"]}, depends_on)
+                    {"fields": copy.deepcopy(entry["fields"])}, depends_on)
         for definition in definitions:
             reference = definition.get("reference")
             if not reference:
@@ -216,7 +226,94 @@ def plan(state, metafield_columns=None):
                 {"name": country["tax_name"], "rate": rate, "country": country["country"]},
                 {"rate": rate, "country": country["country"]})
 
+    if include_recorded:
+        return entries
     return [e for e in entries if not _recorded(state, e["key"])]
+
+
+PLANNED_KINDS = {"metafield_definition", "category", "attribute_definition", "attribute_option", "collection",
+                 "metaobject_definition", "metaobject", "tax"}
+RENAMED_KINDS = {"metafield_definition", "attribute_definition", "metaobject_definition"}
+
+
+def _shown(value):
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _compare(kind, old, new):
+    """(destructive reasons, update body fields) between a recorded spec and the current one."""
+    reasons, update = [], []
+    for field in {"metafield_definition": ["type"], "attribute_definition": ["type", "multiple"]}.get(kind, []):
+        if old.get(field) != new.get(field):
+            reasons.append(f"{field} {_shown(old.get(field))} -> {_shown(new.get(field))}")
+    if kind in RENAMED_KINDS and old.get("name") != new.get("name"):
+        update.append("name")
+    if kind == "metaobject_definition":
+        old_fields, new_fields = old.get("fields") or {}, new.get("fields") or {}
+        old_targets, new_targets = old.get("targets") or {}, new.get("targets") or {}
+        for key, field_type in old_fields.items():
+            if key not in new_fields:
+                reasons.append(f"field {key} removed")
+            elif new_fields[key] != field_type:
+                reasons.append(f"field {key} type {field_type} -> {new_fields[key]}")
+            elif key in old_targets and old_targets[key] != new_targets.get(key):
+                reasons.append(f"field {key} target {old_targets[key]} -> {new_targets.get(key)}")
+        if set(new_fields) - set(old_fields):
+            update.append("fieldDefinitions")
+    if kind == "metaobject" and old.get("fields") != new.get("fields"):
+        update.append("fields")
+    return reasons, update
+
+
+def _products_using(state, key, iri):
+    handles = []
+    for handle, product in state.get("products", {}).items():
+        if product.get("status") not in ("created", "archived"):
+            continue
+        uses = any(i.get("shared") == key and i.get("status") != "deleted" for i in product.get("items", []))
+        written = (product.get("written") or {}).get("payload")
+        if uses or (iri and written is not None and iri in json.dumps(written, ensure_ascii=False)):
+            handles.append(handle)
+    return sorted(handles)
+
+
+def changes(state, metafield_columns=None):
+    """Recorded shared elements against the current plan. Only elements recorded `created` are changed: a
+    renamed or moved category or collection is its path removed plus a new one (created by `plan`)."""
+    current = {e["key"]: e for e in plan(state, metafield_columns, include_recorded=True)}
+    result = {"destructive": [], "updates": [], "unmanaged": [], "unknown": []}
+    for key, recorded in state.get("shared", {}).items():
+        kind = key.split(":", 1)[0]
+        if kind not in PLANNED_KINDS or recorded.get("status") not in ("created", "reused"):
+            continue
+        entry = current.get(key)
+        if entry is None:
+            reasons, update = ["removed"], []
+        elif recorded.get("spec") is None:
+            result["unknown"].append(key)
+            continue
+        else:
+            reasons, update = _compare(kind, recorded["spec"], entry["spec"])
+        if not reasons and not update:
+            continue
+        if recorded["status"] == "reused":
+            result["unmanaged"].append(key)
+        elif reasons:
+            result["destructive"].append({"key": key, "reason": "; ".join(reasons),
+                                          "products": _products_using(state, key, recorded.get("iri"))})
+        else:
+            result["updates"].append({"key": key, "operation": f"update_{kind}", "iri": recorded["iri"],
+                                      "module": entry["module"], "body": {f: entry["body"][f] for f in update},
+                                      "spec": entry["spec"], "depends_on": entry["depends_on"]})
+    return result
+
+
+def unconfirmed(state, found):
+    """Destructive keys not confirmed by the decision `confirmed_changes` of the current phase."""
+    decision = phase_decision(state, "confirmed_changes")
+    keys = decision.get("keys") if isinstance(decision, dict) else None
+    confirmed = set(keys) if isinstance(keys, list) else set()
+    return [c["key"] for c in found["destructive"] if c["key"] not in confirmed]
 
 
 def _read_json(path):
@@ -228,15 +325,27 @@ def main(argv):
     parser = argparse.ArgumentParser(description="Ordered plan of the shared elements to create")
     parser.add_argument("dir")
     parser.add_argument("--ready", action="store_true", help="only entries whose dependencies are recorded")
+    parser.add_argument("--changes", action="store_true", help="changes on the recorded shared elements")
     args = parser.parse_args(argv[1:])
     try:
         state = _read_json(os.path.join(args.dir, "state.json"))
         products_path = os.path.join(args.dir, "products.json")
         columns = _read_json(products_path).get("metafield_columns") if os.path.exists(products_path) else None
-        entries = plan(state, columns)
+        if args.changes:
+            found = changes(state, columns)
+        else:
+            entries = plan(state, columns)
     except (OSError, ValueError, PayloadError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
+    if args.changes:
+        print(dumps(found))
+        waiting = unconfirmed(state, found)
+        if waiting:
+            print(f"{len(waiting)} destructive changes not confirmed for phase {state.get('phase', 1)}: "
+                  f"{', '.join(waiting)}", file=sys.stderr)
+            return 1
+        return 0
     if args.ready:
         entries = [e for e in entries if not e["depends_on"]]
     print(dumps(entries))

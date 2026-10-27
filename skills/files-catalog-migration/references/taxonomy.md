@@ -54,6 +54,8 @@ Each entry of `attributes` turns one characteristic column into an attribute def
 | `value`    | field spec of the column (`map` for spelling variants, `transform` such as `boolean`)                    | required                |
 | `origin`   | `developer`, `agent` or `client`, with its `reason` in the data language                                 | -                       |
 
+Once a definition is created, pin its `code` in the mapping entry (`"code": "matiere"`): a later change of `name` then stays an update of the definition, while a code derived from a new name is another key (the created definition removed, a destructive change in a later phase).
+
 A product's values are the distinct non-empty results of `value` over its rows, in row order. An empty cell gives no value (never `Non`). Options of a `list` definition are its distinct values in order of first appearance, each with the cleaned cell it comes from (`source`, shown as `Acier inoxydable (from Inox)` in the preview). The definition is attached to the lowest common ancestor of the categories of its products (or to each root when they share none). Products without category lose their values (`uncategorized_values`).
 
 1. **Candidates**: the rows of `$S/columns.py propose <dir>` with role `attribute` (its type `list` or `string`), and the `value_variants` flags of those columns in `inventory.json` (`Inox`, `inox`).
