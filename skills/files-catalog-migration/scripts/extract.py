@@ -18,6 +18,7 @@ from typing import Dict, List, Optional, Tuple
 import catalog
 import clean
 import codes
+import describe
 import mapping
 from intake import sha256
 from mapping import MappingError, evaluate, is_spec, warn
@@ -97,6 +98,10 @@ def check_products_mapping(m: dict) -> None:
                 raise MappingError("%s.%s: unknown field (valid: %s)" % (section, name, ", ".join(fields)))
             if not is_spec(spec):
                 raise MappingError("%s.%s: a field spec is required" % (section, name))
+            if "generate" in spec:
+                if (section, name) != ("product", "description_html"):
+                    raise MappingError("%s.%s: generate is only valid on product.description_html" % (section, name))
+                describe.check_generate(spec["generate"], list(m["sources"]), "%s.%s.generate" % (section, name))
     options = m.get("options") or []
     if not isinstance(options, list) or not all(
             isinstance(o, dict) and isinstance(o.get("name"), str) and o["name"] and is_spec(o.get("value"))
@@ -135,11 +140,6 @@ def assign_generated_keys(keyless: List[Tuple[int, Optional[str]]], titles, entr
             assigned[row] = GENERATED_KEY % number
             new.append({"source": source_id, "row": row, "title": title, "key": assigned[row]})
     return assigned, new
-
-
-def describe_product(product, spec, row, sources, warnings, approved):
-    """Description step (poor descriptions and their validated generation); unchanged for now."""
-    return product
 
 
 class ProductExtraction:
@@ -311,8 +311,8 @@ def extract_products(directory: str, m: dict, fixes: dict, cleaner: clean.Cleane
     approved = isinstance(decision, dict) and decision.get("approved") is True
     description_spec = (m.get("product") or {}).get("description_html")
     first_rows = {slugify(ident): group_rows[0] for ident, group_rows in groups.items()}
-    products = [describe_product(product, description_spec, first_rows[product["handle"]], sources, warnings,
-                                 approved) for product in products]
+    products = [describe.apply(product, description_spec, first_rows[product["handle"]], sources, warnings,
+                                approved) for product in products]
 
     data = {
         "version": 1, "products": products, "warnings": warnings,

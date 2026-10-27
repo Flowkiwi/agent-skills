@@ -13,7 +13,21 @@
   },
   "product": {
     "title": {"from": ["main:accroche"], "transform": [{"regex": "^(.+?)(?: - (?:Noir|Rouge))?$"}]},
-    "description_html": {"from": ["main:descriptif"]},
+    "description_html": {
+      "from": ["main:descriptif"],
+      "generate": {
+        "when": "poor",
+        "min_length": 20,
+        "intro": "{title}",
+        "separator": " : ",
+        "features": [
+          {"label": "Matière", "from": ["main:matiere"], "map": {"inox": "Inox"}},
+          {"label": "Coloris", "from": ["main:coloris"]}
+        ],
+        "origin": "agent",
+        "reason": "Descriptions absentes ou réduites au titre : description construite avec les caractéristiques du fichier."
+      }
+    },
     "vendor": {"from": ["main:marque"]},
     "product_category": {"from": ["main:categorie"]},
     "images": {"from": ["main:visuel_princ"], "pick": "all"}
