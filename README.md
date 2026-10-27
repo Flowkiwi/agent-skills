@@ -4,9 +4,10 @@ Flowkiwi skills for agent collaboration. Every skill lives in its own folder und
 
 ## Skills
 
-| Skill                                                           | Use it to                                                                                                  | Validated with | Should work with (untested) |
-| --------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------- | -------------- | --------------------------- |
-| [`shopify-catalog-migration`](skills/shopify-catalog-migration) | Rebuild a Shopify store catalog in a Flowkiwi tenant through the Flowkiwi MCP, from backoffice CSV exports | Claude Code    | Codex, Cursor, Gemini CLI   |
+| Skill                                                           | Use it to                                                                                                       | Validated with | Should work with (untested)            |
+| --------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------- | -------------- | -------------------------------------- |
+| [`shopify-catalog-migration`](skills/shopify-catalog-migration) | Rebuild a Shopify store catalog in a Flowkiwi tenant through the Flowkiwi MCP, from backoffice CSV exports      | Claude Code    | Codex, Cursor, Gemini CLI              |
+| [`files-catalog-migration`](skills/files-catalog-migration)     | Build a Flowkiwi catalog from client spreadsheet files (xlsx, csv) through the Flowkiwi MCP, concept by concept | -              | Claude Code, Codex, Cursor, Gemini CLI |
 
 "Should work with" means the skill only relies on the Agent Skills format, a shell and an MCP client, but nobody has run it with that agent yet. Please report what breaks.
 
@@ -18,6 +19,12 @@ Flowkiwi skills for agent collaboration. Every skill lives in its own folder und
 
 > [!WARNING]
 > Migration workspaces are created in `migrations/<client-slug>/` under the current directory. They contain client data: keep them out of git.
+
+### files-catalog-migration
+
+- Ask your agent to build a catalog from spreadsheet files, for example "build the catalog of acme from these files". The skill inventories the files, proposes a mapping concept by concept (products, taxonomy, collections, metafields, metaobjects, prices) and shows a dry-run before writing anything.
+- The client files are copied to `migrations/<client-slug>/sources/` and never modified.
+- At the end of a run the skill writes `client-review.md`: the questions to send to the client and the choices made for them. Once the client answered, a later phase adjusts the data.
 
 ## Install a skill
 
