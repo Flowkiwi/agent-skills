@@ -10,8 +10,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 import diff  # noqa: E402
 import payload  # noqa: E402
 import state  # noqa: E402
-from phase_helpers import (created_line, make_products, make_state, product_iri, read_json, run_cli,  # noqa: E402
-                           variant_iri, write_json, write_workspace)
+from phase_helpers import (checked, created_line, make_products, make_state, product_iri, read_json,  # noqa: E402
+                           run_cli, variant_iri, write_json, write_workspace)
 
 
 def product(products, handle):
@@ -34,8 +34,8 @@ class UpdateWorklistsTest(unittest.TestCase):
         return st
 
     def test_selection(self):
-        d = {"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230"], "unmanaged": [],
-             "conflicts": {"2227": {"title": {}}}, "new": [], "rekeyed": []}
+        d = checked({"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230"], "unmanaged": [],
+             "conflicts": {"2227": {"title": {}}}, "new": [], "rekeyed": []})
         st = self.created_state(["2226", "2227", "2230"], phase=2)
         with self.assertRaisesRegex(ValueError, "removed_action"):
             state.worklists(st, 1, None, False, update=True, diff_data=d)
@@ -43,6 +43,19 @@ class UpdateWorklistsTest(unittest.TestCase):
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [["2226", "2230"]])
         state.decide(st, "force_update", {"phase": 2, "handles": ["2227"]}, "developer")
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [["2226", "2227", "2230"]])
+
+    def test_needs_the_conflicts_step(self):
+        st = self.created_state(["2226", "2227"])
+        d = {"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": [], "conflicts": {},
+             "conflicts_checked": False}
+        with self.assertRaisesRegex(ValueError, "no conflicts computed since diff.py ran"):
+            state.worklists(st, 1, None, False, update=True, diff_data=d)
+        d.update(conflicts_checked=True, missing_snapshots=["2227"])
+        report = {}
+        self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d, report=report), [["2226"]])
+        self.assertIn("no Flowkiwi snapshot read in this phase", report["skipped"]["2227"])
+        empty = {"phase": 2, "changed": {}, "removed": [], "conflicts_checked": False}
+        self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=empty), [])
 
     def test_stale_diff(self):
         st = self.created_state(["2226"], phase=3)
@@ -55,8 +68,8 @@ class UpdateWorklistsTest(unittest.TestCase):
             state.worklists(st, 1, None, False, update=True)
 
     def test_skipped_are_reported(self):
-        d = {"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230"], "unmanaged": ["2230"],
-             "conflicts": {"2227": {"title": {}}}}
+        d = checked({"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230"], "unmanaged": ["2230"],
+             "conflicts": {"2227": {"title": {}}}})
         st = self.created_state(["2226", "2227", "2230"])
         report = {}
         self.assertEqual(state.worklists(st, 4, None, False, update=True, diff_data=d, report=report), [["2226"]])
@@ -66,7 +79,7 @@ class UpdateWorklistsTest(unittest.TestCase):
         self.assertIn("unmanaged", report["skipped"]["2230"])
 
     def test_removed_with_conflicts_needs_force(self):
-        d = {"phase": 2, "changed": {}, "removed": ["2230"], "conflicts": {"2230": {"title": {}}}}
+        d = checked({"phase": 2, "changed": {}, "removed": ["2230"], "conflicts": {"2230": {"title": {}}}})
         st = self.created_state(["2230"])
         state.decide(st, "removed_action", {"phase": 2, "action": "delete"}, "developer")
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [])
@@ -74,7 +87,7 @@ class UpdateWorklistsTest(unittest.TestCase):
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [["2230"]])
 
     def test_removed_action_of_an_earlier_phase_is_refused(self):
-        d = {"phase": 2, "changed": {}, "removed": ["2230"]}
+        d = checked({"phase": 2, "changed": {}, "removed": ["2230"]})
         st = self.created_state(["2230"], phase=1)
         state.decide(st, "removed_action", {"phase": 1, "action": "archive"}, "developer")
         state.start_phase(st)
@@ -82,8 +95,8 @@ class UpdateWorklistsTest(unittest.TestCase):
             state.worklists(st, 1, None, False, update=True, diff_data=d)
 
     def test_already_archived_only_for_delete_and_blocked_rekey_archived(self):
-        d = {"phase": 2, "changed": {}, "removed": ["2231"], "already_archived": ["2230"],
-             "removal": {"2230": "removed_action", "2231": "archive_blocked"}}
+        d = checked({"phase": 2, "changed": {}, "removed": ["2231"], "already_archived": ["2230"],
+             "removal": {"2230": "removed_action", "2231": "archive_blocked"}})
         st = self.created_state(["2230", "2231"])
         st["products"]["2230"]["status"] = "archived"
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [["2231"]])
@@ -96,14 +109,14 @@ class UpdateWorklistsTest(unittest.TestCase):
         self.assertEqual(state.worklists(st, 1, None, False, update=True, diff_data=d), [])
 
     def test_deletions_go_to_one_worker(self):
-        d = {"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230", "2231"]}
+        d = checked({"phase": 2, "changed": {"2226": {}, "2227": {}}, "removed": ["2230", "2231"]})
         st = self.created_state(["2226", "2227", "2230", "2231"])
         state.decide(st, "removed_action", {"phase": 2, "action": "delete"}, "developer")
         self.assertEqual(state.worklists(st, 3, None, False, update=True, diff_data=d),
                          [["2230", "2231"], ["2226"], ["2227"]])
 
     def test_failed_update_needs_retry_failed(self):
-        d = {"phase": 2, "changed": {"2226": {}}, "removed": []}
+        d = checked({"phase": 2, "changed": {"2226": {}}, "removed": []})
         st = self.created_state(["2226"])
         st["products"]["2226"]["error"] = "update_product: 422"
         report = {}
@@ -113,7 +126,7 @@ class UpdateWorklistsTest(unittest.TestCase):
 
     def test_update_refuses_pilot_and_module(self):
         st = self.created_state(["2226"])
-        d = {"phase": 2, "changed": {"2226": {}}, "removed": []}
+        d = checked({"phase": 2, "changed": {"2226": {}}, "removed": []})
         with self.assertRaisesRegex(ValueError, "--update"):
             state.worklists(st, 1, None, True, update=True, diff_data=d)
         with self.assertRaisesRegex(ValueError, "--update"):
@@ -139,7 +152,7 @@ class UpdatePassesTest(unittest.TestCase):
         toaster["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
         self.products["products"] = [toaster]
         state.sync_products(self.st, self.products)
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual(self.diff["removal"], {"2230": "delete_rekeyed"})
         with self.assertRaisesRegex(ValueError, "confirmed_rekey for phase 2"):
             self.lists()
@@ -164,7 +177,7 @@ class UpdatePassesTest(unittest.TestCase):
         toaster = product(self.products, "2226")
         toaster["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
         self.products["products"] = [toaster]
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.diff["conflicts"] = {"2226": {"title": {"written": "a", "flowkiwi": "b"}}}
         state.decide(self.st, "confirmed_rekey", {"phase": 2}, "developer")
         report = {}
@@ -177,7 +190,7 @@ class UpdatePassesTest(unittest.TestCase):
         toaster = product(self.products, "2226")
         toaster["title"] = "Grille-pain Toastine"
         toaster["variants"].append(dict(moved, option_values=[]))
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         report = {}
         self.assertEqual(self.lists(report), [["2230"]])
         self.assertEqual(report["pass"], "deletions")
@@ -191,7 +204,7 @@ class UpdatePassesTest(unittest.TestCase):
         one, six = toaster["variants"][0], duo["variants"][1]
         toaster["variants"] = [dict(six, option_values=[])]
         duo["variants"] = [duo["variants"][0], dict(one, option_values=["Rouge"])]
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         report = {}
         self.assertEqual(sorted(h for l in self.lists(report) for h in l), ["2226", "2230"])
         self.assertEqual(report["pass"], "deletions")
@@ -219,17 +232,17 @@ class UpdatePassesTest(unittest.TestCase):
 
     def test_done_updates_are_not_selected_again_with_the_same_diff(self):
         product(self.products, "2226")["title"] = "Grille-pain Toastine"
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual(self.lists(), [["2226"]])
         state.merge(self.st, [updated_line("2226")], self.products)
         self.assertEqual(self.lists(), [])
         product(self.products, "2226")["title"] = "Grille-pain Toastine Inox"
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual(self.lists(), [["2226"]])
 
     def test_placeholders_of_shared_elements_created_since(self):
         state.decide(self.st, "collections", {"membership": {"2226": ["Cuisine"]}}, "developer")
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual(self.diff["changed"]["2226"]["product"]["collections"], [[], ["<collection:Cuisine IRI>"]])
         state.record_shared(self.st, "collection:Cuisine", "/api/collections/00000000-0000-4000-8000-000000000020",
                             "created", "collections")
@@ -245,7 +258,7 @@ class UpdatePassesTest(unittest.TestCase):
         self.st["products"]["2230"]["items"][0]["status"] = "reused"
         self.move_1006_to_2226()
         product(self.products, "2226")["title"] = "Grille-pain Toastine"
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual((self.diff["unmanaged"], self.diff["moved"]),
                          (["2230"], [{"sku": "1006", "from": "2230", "to": ["2226"]}]))
         for _ in range(2):
@@ -256,7 +269,7 @@ class UpdatePassesTest(unittest.TestCase):
     def test_move_from_a_reused_variant_is_skipped(self):
         self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
         self.move_1006_to_2226()
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         report = {}
         self.assertEqual(self.lists(report), [])
         self.assertIn("SKU 1006 held by 2230 as a reused variant", report["skipped"]["2226"])
@@ -271,7 +284,7 @@ class UpdatePassesTest(unittest.TestCase):
             dict(duo, key=v["sku"], handle=v["sku"], variants=[dict(v, option_values=[])], options=[])
             for v in duo["variants"]]
         state.sync_products(self.st, self.products)
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
         self.assertEqual((self.diff["already_archived"], self.diff["removal"]), (["2230"], {"2230": "delete_rekeyed"}))
         with self.assertRaisesRegex(ValueError, "confirmed_rekey for phase 3"):
             self.lists()
@@ -309,9 +322,12 @@ class UpdateWorklistsCliTest(unittest.TestCase):
             write_workspace(directory, products, st)
             result = run_cli(directory, script="diff.py")
             self.assertEqual(result.returncode, 0, result.stderr)
+            result = run_cli("worklists", directory, "--workers", "4", "--update")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("no conflicts computed since diff.py ran", result.stderr)
             data = read_json(os.path.join(directory, "diff.json"))
             data["conflicts"] = {"2230": {"title": {"written": "a", "flowkiwi": "b"}}}
-            write_json(os.path.join(directory, "diff.json"), data)
+            write_json(os.path.join(directory, "diff.json"), checked(data))
             result = run_cli("worklists", directory, "--workers", "4", "--update")
             self.assertEqual(result.returncode, 0, result.stderr)
             output = json.loads(result.stdout)

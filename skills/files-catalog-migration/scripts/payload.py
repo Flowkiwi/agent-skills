@@ -37,6 +37,8 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
   {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
   the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey, and a
   blocked rekey (removal archive_blocked) is always archived, whatever removed_action says.
+Refused while diff.json lists products to write and `diff.py conflicts` has not run since the last diff.py
+(conflicts_checked), and for a handle without snapshot (missing_snapshots).
 A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A new variant whose
 SKU is still a created variant of another product (diff.json moved, rekeyed, two products swapping SKUs) is left
 out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
@@ -566,6 +568,9 @@ def update_plan(products, state, diff_data, handle):
     phase = state.get("phase", 1)
     if diff_data.get("phase") != phase:
         raise PayloadError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    unchecked = state_module.conflicts_unchecked(diff_data)
+    if unchecked:
+        raise PayloadError(unchecked)
     entry = state.get("products", {}).get(handle)
     reused = entry is not None and any(i["kind"] == "product" and i.get("status") == "reused" for i in entry["items"])
     if handle in diff_data.get("unmanaged", []) or reused:
@@ -574,6 +579,8 @@ def update_plan(products, state, diff_data, handle):
     removed = handle in diff_data.get("removed", []) or handle in diff_data.get("already_archived", [])
     if entry is None or not (changed or removed):
         raise PayloadError(f"'{handle}' is not in diff.json changed or removed")
+    if handle in (diff_data.get("missing_snapshots") or []):
+        raise PayloadError(f"'{handle}': {state_module.MISSING_SNAPSHOT}")
     if _conflicted(state, diff_data, handle):
         raise PayloadError(f"'{handle}' was modified in Flowkiwi since the last import (see diff.json conflicts): "
                            "force it with decision force_update")

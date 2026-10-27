@@ -124,6 +124,20 @@ def forced(state, handle):
     return handles == "all" or (isinstance(handles, list) and handle in handles)
 
 
+def conflicts_unchecked(diff_data):
+    """The refusal message while diff.json lists products to write and the conflicts step has not run on it
+    (diff.py resets the conflicts): without it, a product modified in Flowkiwi would be overwritten unforced."""
+    to_write = diff_data.get("changed") or diff_data.get("removed") or diff_data.get("already_archived")
+    if to_write and not diff_data.get("conflicts_checked"):
+        return ("diff.json has no conflicts computed since diff.py ran: read the snapshots of this phase into "
+                "tmp/remote/, then run diff.py conflicts <dir>")
+    return None
+
+
+MISSING_SNAPSHOT = ("no Flowkiwi snapshot read in this phase (diff.json missing_snapshots): read it, "
+                    "then diff.py conflicts")
+
+
 def record_shared(state, key, iri, status, module, spec=None):
     entry = {"iri": iri, "status": status, "module": module}
     if spec is not None:
@@ -278,7 +292,8 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
     whose action is a deletion. Never selected (in `skipped` with the reason): unmanaged handles, unforced
     conflicts, a deletion whose receiver has an unforced conflict, a failed update without retry_failed, a
     product waiting for a SKU still held by another one, a product receiving a SKU this migration never deletes
-    (moved from an unmanaged product or a reused variant); handles already done in this phase are left out."""
+    (moved from an unmanaged product or a reused variant), a handle without snapshot (missing_snapshots); handles
+    already done in this phase are left out. Refused while the conflicts step has not run since diff.py."""
     import payload  # function-level: payload imports state
 
     phase = state.get("phase", 1)
@@ -286,8 +301,12 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
         raise ValueError("--update needs diff.json: run diff.py <dir> first")
     if diff_data.get("phase") != phase:
         raise ValueError(f"diff.json is from phase {diff_data.get('phase')}, run diff.py again")
+    unchecked = conflicts_unchecked(diff_data)
+    if unchecked:
+        raise ValueError(unchecked)
     skipped = {} if skipped is None else skipped
     entries = state["products"]
+    missing = set(diff_data.get("missing_snapshots") or [])
     unmanaged = set(diff_data.get("unmanaged") or [])
     conflicts = diff_data.get("conflicts") or {}
     removal = diff_data.get("removal") or {}
@@ -302,6 +321,8 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None):
             return False
         if handle in unmanaged:
             skipped[handle] = "unmanaged (reused): never written"
+        elif handle in missing:
+            skipped[handle] = MISSING_SNAPSHOT
         elif conflicted(handle):
             skipped[handle] = ("modified in Flowkiwi since the last import (diff.json conflicts): "
                                "force_update to update it")

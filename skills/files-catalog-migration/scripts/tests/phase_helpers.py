@@ -54,6 +54,12 @@ def created_line(handle, products=None):
     return {"handle": handle, "status": "created", "iri": product_iri(handle), "error": None, "items": items}
 
 
+def checked(diff_data):
+    """A diff.json as after the conflicts step (diff.py conflicts) found no conflict."""
+    diff_data["conflicts_checked"] = True
+    return diff_data
+
+
 def write_json(path, data):
     os.makedirs(os.path.dirname(path), exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:

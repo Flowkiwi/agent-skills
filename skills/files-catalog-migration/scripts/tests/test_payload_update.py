@@ -11,7 +11,7 @@ sys.path.insert(0, os.path.dirname(__file__))
 import diff  # noqa: E402
 import payload  # noqa: E402
 import state  # noqa: E402
-from phase_helpers import (created_line, make_products, make_state, product_iri, run_cli,  # noqa: E402
+from phase_helpers import (checked, created_line, make_products, make_state, product_iri, run_cli,  # noqa: E402
                            variant_iri, write_workspace)
 
 
@@ -39,7 +39,7 @@ class UpdatePlanTest(unittest.TestCase):
         self.refresh()
 
     def refresh(self):
-        self.diff = diff.diff(self.st, self.products)
+        self.diff = checked(diff.diff(self.st, self.products))
 
     def drop_variant(self, handle, sku):
         p = product(self.products, handle)
@@ -60,6 +60,14 @@ class UpdatePlanTest(unittest.TestCase):
         self.drop_variant("2230", "1006")
         plan = payload.update_plan(self.products, self.st, self.diff, "2230")
         self.assertEqual(plan["variants"]["delete"], [{"iri": self.variant_iri("2230", "1006"), "sku": "1006"}])
+
+    def test_needs_the_conflicts_step(self):
+        self.diff["conflicts_checked"] = False
+        with self.assertRaisesRegex(payload.PayloadError, "no conflicts computed since diff.py ran"):
+            payload.update_plan(self.products, self.st, self.diff, "2226")
+        self.diff.update(conflicts_checked=True, missing_snapshots=["2226"])
+        with self.assertRaisesRegex(payload.PayloadError, "no Flowkiwi snapshot read in this phase"):
+            payload.update_plan(self.products, self.st, self.diff, "2226")
 
     def test_conflict_needs_force(self):
         self.diff["conflicts"] = {"2226": {"title": {"written": "a", "flowkiwi": "b"}}}
@@ -94,7 +102,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         state.merge(self.st, [line], self.products)
 
     def plan(self, handle):
-        return payload.update_plan(self.products, self.st, diff.diff(self.st, self.products), handle)
+        return payload.update_plan(self.products, self.st, checked(diff.diff(self.st, self.products)), handle)
 
     def test_not_in_diff_and_unmanaged(self):
         self.create("2226")
@@ -108,7 +116,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
 
     def test_stale_diff(self):
         self.create("2226")
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         state.start_phase(self.st)
         with self.assertRaisesRegex(payload.PayloadError, "diff.json is from phase 1, run diff.py again"):
             payload.update_plan(self.products, self.st, d, "2226")
@@ -237,7 +245,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         moved = duo["variants"].pop()
         product(self.products, "2226")["title"] = "Grille-pain Toastine"
         product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         plan = payload.update_plan(self.products, self.st, d, "2226")
         self.assertEqual(plan["deferred"], [{"sku": "1006", "held_by": "2230"}])
         self.assertEqual(plan["product"]["body"], {"title": "Grille-pain Toastine"})
@@ -256,7 +264,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         one, six = toaster["variants"][0], duo["variants"][1]
         toaster["variants"] = [dict(six, option_values=[])]
         duo["variants"] = [duo["variants"][0], dict(one, option_values=["Rouge"])]
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         self.assertEqual(sorted(m["sku"] for m in d["moved"]), ["1001", "1006"])
         first = payload.update_plan(self.products, self.st, d, "2226")
         second = payload.update_plan(self.products, self.st, d, "2230")
@@ -284,19 +292,19 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         one, six = toaster["variants"][0], duo["variants"][1]
         toaster["variants"] = [dict(six, option_values=[])]
         duo["variants"] = [duo["variants"][0], dict(one, option_values=["Rouge"])]
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         lines = []
         for handle in ("2226", "2230"):
             plan = payload.update_plan(self.products, self.st, d, handle)
             lines.append(self.updated_line(handle, deleted=[v["iri"] for v in plan["variants"]["delete"]]))
         state.merge(self.st, lines, self.products)
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         self.assertEqual((d["changed"]["2226"]["variants"], d["changed"]["2230"]["variants"]),
                          ({"added": ["1006"]}, {"added": ["1001"]}))
         plan = payload.update_plan(self.products, self.st, d, "2226")
         self.assertEqual(([v["sku"] for v in plan["variants"]["create"]], "deferred" in plan), (["1006"], False))
         state.merge(self.st, [self.updated_line("2226", [item("2226", "variant", "1006")])], self.products)
-        self.assertNotIn("2226", diff.diff(self.st, self.products)["changed"])
+        self.assertNotIn("2226", checked(diff.diff(self.st, self.products))["changed"])
 
     def rekey_into_2226(self):
         self.create("2226")
@@ -305,7 +313,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         duo = product(self.products, "2230")
         product(self.products, "2226")["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
         self.products["products"] = [product(self.products, "2226")]
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         self.assertEqual((d["removal"], d["rekeyed"][0]["changed"]), ({"2230": "delete_rekeyed"}, ["2226"]))
         return d
 
@@ -325,7 +333,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         state.start_phase(self.st)
         moved = product(self.products, "2230")["variants"].pop()
         product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         d["conflicts"] = {"2226": {"title": {"written": "a", "flowkiwi": "b"}}}
         with self.assertRaisesRegex(payload.PayloadError, "'2230' cannot delete SKU 1006 yet: '2226' receives it"):
             payload.update_plan(self.products, self.st, d, "2230")
@@ -359,7 +367,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         state.start_phase(self.st)
         toaster = product(self.products, "2226")
         toaster["variants"].append(dict(toaster["variants"][0], sku="1009", barcode="3601234560098"))
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         toaster["variants"].pop()
         with self.assertRaisesRegex(payload.PayloadError, "variant '1009' of '2226' .* run diff.py again"):
             payload.update_plan(self.products, self.st, d, "2226")
@@ -370,7 +378,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         duo = product(self.products, "2230")
         duo["options"] = [{"name": "Couleur", "values": ["Noir", "Bleu"]}]
         duo["variants"] = [duo["variants"][0], {"sku": "1007", "barcode": "3601234560074", "option_values": ["Bleu"]}]
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         state.mark_deleted(self.st, [variant_iri("2230", "1006"), child_iri("2230", "option_value", "Couleur:Rouge")])
         line = {"handle": "2230", "status": "updated", "iri": product_iri("2230"), "error": None,
                 "items": [item("2230", "option_value", "Couleur:Bleu"), item("2230", "variant", "1007")]}
@@ -402,7 +410,7 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         duo = product(self.products, "2230")
         product(self.products, "2226")["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
         self.products["products"] = [product(self.products, "2226")]
-        d = diff.diff(self.st, self.products)
+        d = checked(diff.diff(self.st, self.products))
         self.assertEqual(d["removal"], {"2230": "archive_blocked"})
         archive = {"handle": "2230", "action": "archive", "iri": product_iri("2230"),
                    "product": {"body": {"status": "/api/statuses/ARCHIVED"}}}
@@ -436,6 +444,14 @@ class UpdateCliTest(unittest.TestCase):
             write_workspace(directory, products, st)
             result = run_cli(directory, script="diff.py")
             self.assertEqual(result.returncode, 0, result.stderr)
+            result = run_cli(directory, "2230", "--update", script="payload.py")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("no conflicts computed since diff.py ran", result.stderr)
+            diff_path = os.path.join(directory, "diff.json")
+            with open(diff_path, encoding="utf-8") as f:
+                data = checked(json.load(f))
+            with open(diff_path, "w", encoding="utf-8") as f:
+                json.dump(data, f)
             result = run_cli(directory, "2230", "--update", script="payload.py")
             self.assertEqual(result.returncode, 0, result.stderr)
             plan = json.loads(result.stdout)

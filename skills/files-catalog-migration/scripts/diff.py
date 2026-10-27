@@ -42,6 +42,7 @@ diff.json:
                     (filled by the conflicts step; never updated, archived or deleted unless forced)
   missing_snapshots handles of changed, removed or already_archived without a snapshot read in the current
                     phase (filled by the conflicts step)
+  conflicts_checked false until the conflicts step ran on this diff.json: the update run refuses before
   snapshots         {"<handle>": <mtime>}: the snapshot files the conflicts step compared (dryrun.py blocks when a
                     snapshot changed or appeared since)
   source            sha256 of the products of products.json and of the decisions (the phase decisions aside):
@@ -254,7 +255,8 @@ def diff(state_data, products):
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
               "blocked_rekeys": {}, "moved": [], "no_written": [], "errors": {}, "conflicts": {},
-              "missing_snapshots": [], "snapshots": {}, "source": source_fingerprint(state_data, products)}
+              "missing_snapshots": [], "snapshots": {}, "conflicts_checked": False,
+              "source": source_fingerprint(state_data, products)}
 
     for handle in present:
         product = entries.get(handle)
@@ -531,6 +533,7 @@ def conflicts_main(args):
         if changes:
             found[handle] = changes
     diff_data["conflicts"], diff_data["missing_snapshots"], diff_data["snapshots"] = found, missing, read
+    diff_data["conflicts_checked"] = True
     _write_json(diff_path, diff_data)
     print(conflicts_report(diff_data, state_data, not_compared))
     return 0
