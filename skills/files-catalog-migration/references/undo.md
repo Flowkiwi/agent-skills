@@ -38,7 +38,7 @@ Purchase offers, suppliers and channels are not created by this version; every o
 
 ## Procedure
 
-1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements: `module:core` for the products with their options, variants and markers, and the marker definition; `module:taxonomy`, `collections`, `metafields`, `metaobjects` or `prices` for one concept, the products kept), `shared:<key>` (one shared element and the product items tied to it, never the marker definition), or `all`.
+1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements: `module:core` for the products with their options, variants and markers, and the marker definition; `module:taxonomy`, `collections`, `metafields`, `metaobjects` or `prices` for one concept, the products kept), `shared:<key>` (one shared element and the product items tied to it, never the marker definition), `product:<handle>` (the `created` items of one product, children first, without any shared element: how a later phase deletes a removed product, `references/phases.md`), or `all`.
 2. `python3 $SKILL/scripts/state.py merge <dir>` then `python3 $SKILL/scripts/state.py undo-plan <dir> --scope <scope>`.
 3. Show counts per kind and what will be archived instead of deleted. Wait for explicit confirmation: this is destructive.
 4. Walk the plan in order (it is sorted children first). For each step:

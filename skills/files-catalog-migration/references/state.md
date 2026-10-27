@@ -11,12 +11,14 @@ migrations/<client-slug>/
 ├── concepts/           # <concept>.json: structured files of the concepts (taxonomy, collections, metafields, metaobjects, prices)
 ├── fixes.json          # renames, skips, field fixes and generated keys, replayed on every extract
 ├── state.json          # decisions with their origin, shared elements, per-product progress
-├── client-review.md    # questions for the client and choices made for them: not written by this version yet
+├── client-review.md    # questions for the client, choices made for them and missing data (client_review.py)
+├── diff.json           # a later phase: the difference with what the last import wrote, and the conflicts (diff.py)
 ├── worklists/          # worker-<n>.json: handles assigned to each worker
 ├── results/            # worker-<n>.jsonl: one result line per product, written by workers
 │                       # rejected-<stamp>.jsonl: lines refused by merge, with the reason; merged/: merged files
 ├── verify-sample.json  # handles whose description is checked after creation (verify.py sample)
-├── tmp/                # worker-<n>/ and shared/: each worker's own temporary files; columns-proposal.json (columns.py)
+├── tmp/                # worker-<n>/ and shared/: each worker's own temporary files; columns-proposal.json (columns.py);
+│                       # remote/<handle>.json: Flowkiwi read-back snapshots of a later phase (diff.py conflicts)
 └── undo/               # deleted-<timestamp>.json: IRIs deleted by an undo run
 ```
 
@@ -127,7 +129,7 @@ After a change that skips products, run `state.py sync <dir>`.
 - `decision_meta.<key>`: `origin` (`developer`, `agent` or `client`), `reason` (in the data language), `phase` and `at`, written by `state.py decide`.
 - Product status: `pending`, `created`, `failed`, `deleted`, `archived` (archived in Flowkiwi by a later phase), `skipped` (handle no longer in `products.json`, set by `state.py sync` on a `pending` product or a `failed` one without any `created` item; back to `pending` if it reappears). `deleted` and `archived` products are never assigned to a creation worker nor counted as to create by `dryrun.py`.
 - `removed`: `true` on a `created` or `archived` product whose handle is no longer in `products.json` (set by `state.py sync`, cleared when the handle comes back). A later phase asks once what to do with the `created` ones (archive or delete); a deleted product is never flagged again.
-- `written`: what the last import wrote for the product, `{"phase": <n>, "payload": <payload.py output>}`, recorded by `state.py merge` for every `created` or `updated` line (only the last one is kept). A module-only line refreshes only its part of the previous snapshot (`taxonomy`: the body `category` and `attributes`; `collections`: the body `collections`; `metafields` or `metaobjects`: their entries of `metafields`; `prices`: `prices`), the rest stays as written; with no previous snapshot, none is recorded. An `archived` line keeps the previous payload with the status `/api/statuses/ARCHIVED`, the only field the archive run wrote. When `payload.py` fails at merge time, `written` stays as it was and merge prints `warning: no written snapshot for <handle>: <error>`. A later phase compares it with the payload computed from the regenerated files.
+- `written`: what the last import wrote for the product, `{"phase": <n>, "payload": <payload.py output>}`, recorded by `state.py merge` for every `created` or `updated` line (only the last one is kept). A module-only line refreshes only its part of the previous snapshot (`taxonomy`: the body `category` and `attributes`; `collections`: the body `collections`; `metafields` or `metaobjects`: their entries of `metafields`; `prices`: `prices`), the rest stays as written; with no previous snapshot, none is recorded. An `updated` line leaves out the variants its run deferred (a SKU still held by another product: not created yet, with their prices and the option values only they use) and keeps the previous entries of the reused children it never wrote, so the next `diff.py` still finds them. An `archived` line keeps the previous payload with the status `/api/statuses/ARCHIVED`, the only field the archive run wrote. When `payload.py` fails at merge time, `written` stays as it was and merge prints `warning: no written snapshot for <handle>: <error>`. A later phase compares it with the payload computed from the regenerated files.
 - `updated_phase`: the phase of the last in-place update of the product.
 - `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
 - `decisions.status_mode`: `draft`, `active` or `source`. `decisions.status_map`: `{"<source status in lowercase>": "<Flowkiwi status code>"}`, e.g. `{"hors ligne": "DRAFT"}`, applied before the default mapping when `status_mode` is `source`. Keys are always lowercase: the status is lowercased before the lookup (`catalog.py --check` and `payload.py`). The key `""` maps the products without a source status.
@@ -174,6 +176,7 @@ $S/state.py decide <dir> --key <name> --value-json '<json>' | --value-file <file
 $S/state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module> [--spec-json '<json>']
 $S/state.py shared <dir> --file <dir>/tmp/shared/shared.json         # [{"key", "iri", "status", "module", "spec"}, ...]
 $S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] [--retry-failed] [--module <name>]
+$S/state.py worklists <dir> --workers 4 --update [--handles a,b,c] [--retry-failed]   # a later phase: next pass of diff.json
 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 $S/state.py merge <dir>                                              # also records the written snapshots
 $S/state.py phase <dir> [--start]                                    # print the current phase, or start the next one
@@ -181,9 +184,14 @@ $S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>|product
 $S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
 $S/state.py reset-deleted <dir>                                      # deleted products back to pending
 $S/state.py summary <dir>                                            # counts per status, failed, verify, decision origins, phase, removed
-$S/dryrun.py <dir>                                                   # exit 1 on blocking warnings, state drift, payload errors, concept files from another products.json or mapping, stale concept decisions or missing decisions
+$S/dryrun.py <dir>                                                   # exit 1 on blocking warnings, state drift, payload errors, concept files from another products.json or mapping, stale concept decisions or missing decisions; in a later phase also diff.json, snapshots and phase decisions (references/phases.md)
 $S/plan_shared.py <dir> [--ready]
+$S/plan_shared.py <dir> --changes                                    # a later phase: destructive changes and updates of the shared elements
 $S/payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|collections|prices|all] [--dry-run]
+$S/payload.py <dir> <handle> --update                                # a later phase: the update operations of one product of diff.json
+$S/diff.py <dir>                                                     # a later phase: writes diff.json
+$S/diff.py conflicts <dir>                                           # compares the snapshots of tmp/remote/ with what was written
+$S/client_review.py <dir> [--labels <file.json>]                     # writes client-review.md
 $S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
 $S/verify.py <dir> <handle> --field description|title --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
 ```
@@ -198,6 +206,7 @@ $S/verify.py <dir> <handle> --field description|title --readback-file <dir>/tmp/
 - `--handles a,b,c`: explicit selection (combine with `--pilot`). An unknown handle, or one that is not `pending` (`failed` too with `--retry-failed`), is an error and the previous worklists are kept.
 - `--pilot` without `--handles`: a representative selection of up to `--limit` products (default 5) covering, when present: several variants, a single variant, a category, no category, metafields, a generated description, each source status, the longest description. The rest is filled in order. The `pilot` flag of products not `created` is cleared first, so only the new selection is flagged.
 - `--module <name>`: `created` products with no live item of that module (a concept added after creation).
+- `--update`: a later phase, the next pass of the update run of `diff.json` (deletions of moved or regrouped SKUs, then updates, archives and deletions), printing the `pass` and the `skipped` handles with their reason (`references/phases.md` `## Update worker`).
 
 `undo-plan --scope product:<handle>`: only the `created` items of that product, children first, without any shared element (used to delete a removed product in a later phase). An unknown handle is an error.
 
