@@ -25,8 +25,11 @@ diff.json:
                     archived) handle whose written SKUs are now held by other products (a grouping change):
                     new handles, and in `changed` the created ones that gain those SKUs (variants.added)
   removal           {"<removed or already archived handle>": "delete_rekeyed" | "removed_action"}: a rekeyed
-                    handle is always deleted, only after decision confirmed_rekey of the phase and before the
-                    creation of its new handles; the others follow decision removed_action
+                    handle is always deleted, only after decision confirmed_rekey of the phase, before the update
+                    of its `changed` handles and before the creation of its new handles; the others (blocked
+                    rekeys included) follow decision removed_action
+  blocked_rekeys    {"<removed handle>": "<reason>"}: a rekey into a product this migration cannot update
+                    (unmanaged, payload error or no written snapshot): not deleted, its SKUs would be lost
   moved             [{"sku", "from", "to": [handles]}]: a SKU leaving a product still in products.json for
                     another one; the variant of `from` must be deleted before the creation in `to`
   unmanaged         changed or removed handles whose product item is reused: never updated, archived or deleted
@@ -231,7 +234,8 @@ def diff(state_data, products):
     entries = state_data.get("products", {})
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
-              "moved": [], "no_written": [], "errors": {}, "conflicts": {}, "missing_snapshots": []}
+              "blocked_rekeys": {}, "moved": [], "no_written": [], "errors": {}, "conflicts": {},
+              "missing_snapshots": []}
 
     for handle in present:
         product = entries.get(handle)
@@ -284,6 +288,9 @@ def diff(state_data, products):
             if sku not in before:
                 holders.setdefault(sku, []).append(p["handle"])
         departures += [(p["handle"], sku) for sku in before if sku not in now]
+    not_updatable = {h: "unmanaged" for h in result["unmanaged"]}
+    not_updatable.update({h: "payload error" for h in result["errors"]})
+    not_updatable.update({h: "no written snapshot" for h in result["no_written"]})
     for handle in gone:
         skus = [s for s in _written_skus(entries[handle]) if s in holders]
         if skus:
@@ -293,7 +300,14 @@ def diff(state_data, products):
             if changed:
                 entry["changed"] = changed
             result["rekeyed"].append(entry)
-            result["removal"][handle] = "delete_rekeyed"
+            stuck = [f"{h} ({not_updatable[h]})" for h in changed if h in not_updatable]
+            if stuck:
+                # deleting it would remove the SKUs from Flowkiwi while the target never receives them
+                result["blocked_rekeys"][handle] = ("rekey into a product this migration cannot update: "
+                                                    + ", ".join(stuck))
+                result["removal"][handle] = "removed_action"
+            else:
+                result["removal"][handle] = "delete_rekeyed"
         else:
             result["removal"][handle] = "removed_action"
     result["moved"] = [{"sku": sku, "from": handle, "to": holders[sku]}
@@ -412,6 +426,8 @@ def report(result):
     for entry in result["rekeyed"]:
         targets = entry["new"] + entry.get("changed", [])
         lines.append(f"rekeyed {entry['removed']} -> {', '.join(targets)} (SKU {', '.join(entry['skus'])})")
+    for handle, reason in result["blocked_rekeys"].items():
+        lines.append(f"blocked rekey {handle}: {reason}")
     for entry in result["moved"]:
         lines.append(f"moved SKU {entry['sku']}: {entry['from']} -> {', '.join(entry['to'])}")
     if result["unmanaged"]:

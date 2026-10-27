@@ -94,6 +94,46 @@ class DiffTest(unittest.TestCase):
         self.assertEqual(d["removal"], {"2230": "delete_rekeyed"})
         self.assertEqual(d["changed"]["2226"]["variants"], {"added": ["1005", "1006"]})
 
+    def regroup_into_2226(self):
+        single, duo = self.products["products"]
+        single["variants"] += duo["variants"]
+        self.products["products"] = [single]
+
+    def test_rekey_into_unmanaged_product_is_blocked(self):
+        self.st["products"]["2226"]["items"][0]["status"] = "reused"
+        self.regroup_into_2226()
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(d["unmanaged"], ["2226"])
+        self.assertEqual(d["rekeyed"], [{"removed": "2230", "new": [], "skus": ["1005", "1006"], "changed": ["2226"]}])
+        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["blocked_rekeys"],
+                         {"2230": "rekey into a product this migration cannot update: 2226 (unmanaged)"})
+        self.assertIn("blocked rekey 2230: rekey into a product this migration cannot update: 2226 (unmanaged)",
+                      diff.report(d))
+
+    def test_rekey_into_product_with_payload_error_is_blocked(self):
+        self.regroup_into_2226()
+        self.products["products"][0]["variants"][1]["option_values"] = [None]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(list(d["errors"]), ["2226"])
+        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["blocked_rekeys"],
+                         {"2230": "rekey into a product this migration cannot update: 2226 (payload error)"})
+
+    def test_rekey_into_product_without_written_snapshot_is_blocked(self):
+        del self.st["products"]["2226"]["written"]
+        self.regroup_into_2226()
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["blocked_rekeys"],
+                         {"2230": "rekey into a product this migration cannot update: 2226 (no written snapshot)"})
+
+    def test_rekey_into_new_products_is_not_blocked(self):
+        duo = self.products["products"][1]
+        self.products["products"][1] = dict(duo, handle="1005", key="1005")
+        d = diff.diff(self.st, self.products)
+        self.assertEqual((d["removal"], d["blocked_rekeys"]), ({"2230": "delete_rekeyed"}, {}))
+
     def test_sku_moving_between_present_products(self):
         single, duo = self.products["products"]
         single["variants"].append(duo["variants"].pop())
