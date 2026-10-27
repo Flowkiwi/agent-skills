@@ -36,7 +36,7 @@ A reference is `"<source id>:<column>"`. `<column>` is matched against the techn
 
 ## Field spec
 
-All keys are optional except one of `from` or `value`.
+A spec holds exactly one of `from` or `value`; the other keys of the table are optional. Any other key is an error naming it (a typo such as `transfrom` would otherwise switch a conversion off silently). A concept can accept more keys, checked by its extractor: `generate` on the products `description_html` (`references/products.md` `## Descriptions`).
 
 ```json
 {"from": ["main:poids_net", "main:dim_poids_net"], "pick": "first", "sep": "\n",
@@ -61,6 +61,8 @@ All keys are optional except one of `from` or `value`.
 | `question`        | the open question to ask the client about this field                                                     | none    |
 
 Evaluation order: the cleaned cell values of `from` -> `pick` -> `map` -> each `transform` step -> `default` when the result is empty. A list value (from `pick: all` or `split`) is mapped and transformed element by element; empty elements are dropped.
+
+A list is only valid on a list field (products: `tags` and `images`). On any other field (`key`, `group.key`, `options[].value`, the other product and variant fields) `pick: all`, a `split` step or a list `value` is rejected when the mapping is checked: use `pick: first` or `pick: join`. A list that still reaches a single-value field during the extraction (a `map` target written as a list) raises the blocking `list_in_single_field` warning instead of keeping its first item silently.
 
 With `pick: first` and `conflicts: warn`, every other non-empty column of `from` goes through the same `map` and `transform`. A different result adds a `conflict` warning naming each column and its value; the first column wins. Numbers are compared as numbers: `1,8` and `1.8` (or `29,90` and `29.9`) with `decimal` are the same value, no conflict.
 
@@ -97,7 +99,9 @@ Join warnings have `field: null` and `handle: null`. Every warning is `{"row", "
 
 ## Cleaning
 
-Cell values are cleaned with the rules of `scripts/clean.py` (and `mappings/cleaning.json`) when the mapping first reads them, each cell once. The cleaning counts of the output cover exactly the cells the mapping reads. Header labels and codes are cleaned for matching but not counted.
+Cell values are cleaned with the rules of `scripts/clean.py` (and `mappings/cleaning.json`) when the mapping first reads them, each cell once. Header labels and codes are cleaned for matching but not counted.
+
+Text written after the cells were read is cleaned too, once `fixes.json` is applied: `map` targets, transform results (a `regex` group keeps no edge space), `fields` fixes, option renames and the intro and labels of generated descriptions. This pass applies the same rules, without the `replacements` of `cleaning.json` (they are for the source cells), so it never changes an already cleaned value. The cleaning counts of the output cover the cells the mapping reads and the changes of this pass.
 
 ## Worked example: `mappings/products.json`
 

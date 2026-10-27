@@ -35,7 +35,7 @@ This version only creates products, options, option values, variants, the `impor
 
 ## Procedure
 
-1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements, `module:core` for every product of this version and the marker definition), `shared:<key>` (one shared element and the product items tied to it), or `all`.
+1. Ask the scope: `pilot` (pilot products and their children), `module:<name>` (one module's items and shared elements, `module:core` for every product of this version and the marker definition), `shared:<key>` (one shared element and the product items tied to it, never the marker definition), or `all`.
 2. `python3 $SKILL/scripts/state.py merge <dir>` then `python3 $SKILL/scripts/state.py undo-plan <dir> --scope <scope>`.
 3. Show counts per kind and what will be archived instead of deleted. Wait for explicit confirmation: this is destructive.
 4. Walk the plan in order (it is sorted children first). For each step:
@@ -45,6 +45,6 @@ This version only creates products, options, option values, variants, the `impor
 5. Write the IRIs actually deleted or archived to `<dir>/undo/deleted-<YYYYMMDD-HHMMSS>.json` (a JSON array), then `python3 $SKILL/scripts/state.py deleted <dir> --iris-file <that file>`.
 6. Report: deleted, archived, already gone, refused (with reason). Products whose `product` item was deleted are now `deleted` in the state; a later run does not recreate them.
 
-Items tied to a shared element carry its key in `"shared"` (the marker metafields record `metafield_definition:import.key`). With `shared:<key>` the plan lists the created items with that key, then the shared element itself if this migration created it. The marker definition `metafield_definition:import.key` is deleted last, and only on a full undo (`all` or `module:core`): without it, no product of this migration can be found again by marker.
+Items tied to a shared element carry its key in `"shared"` (the marker metafields record `metafield_definition:import.key`). With `shared:<key>` the plan lists the created items with that key, then the shared element itself if this migration created it. The marker definition `metafield_definition:import.key` is deleted last, and only on a full undo (`all` or `module:core`): without it, no product of this migration can be found again by marker and a later run would duplicate them. `state.py undo-plan` refuses the scope `shared:metafield_definition:import.key` (exit 1, use `all` or `module:core`).
 
 Expected flow after a bad pilot: undo `pilot`, fix the mapping or the decision (`state.py decide`) and extract again, `python3 $SKILL/scripts/state.py reset-deleted <dir>` (deleted products become `pending` again, with no items), then rerun the pilot.

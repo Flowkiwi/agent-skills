@@ -8,7 +8,7 @@ metadata:
 
 # Files catalog migration
 
-Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to a catalog created in a Flowkiwi tenant, **through the Flowkiwi MCP only**. Work concept by concept, starting from products and variants. Keep it simple for the developer: one question at a time, effort announced before each concept.
+Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to a catalog created in a Flowkiwi tenant, **through the Flowkiwi MCP only**. Work concept by concept, starting from products and variants. Keep it simple for the developer: one grouped question round per concept, always with a default proposal, effort announced before each concept.
 
 `$SKILL` below is this skill's folder: the base directory given when the skill loads (for example `.claude/skills/files-catalog-migration` or `.agents/skills/files-catalog-migration` in a project, the same under the home directory when installed globally, or a folder of the plugin cache when installed as a Claude Code plugin). Always use the base directory given at load time, never a guessed path. Scripts are run as `python3 $SKILL/scripts/<name>.py`. Migration workspaces are created under the current working directory, never inside `$SKILL`.
 

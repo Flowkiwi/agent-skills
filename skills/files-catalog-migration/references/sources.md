@@ -10,12 +10,12 @@ Client files are copied into the workspace by `$S/intake.py`, never read from wh
 
 Exit codes:
 
-| Code | Meaning                                                | What to do                                                                                     |
-|------|--------------------------------------------------------|------------------------------------------------------------------------------------------------|
-| 0    | done                                                   | continue                                                                                       |
-| 1    | same name in `sources/` with other content             | ask the developer whether it is a new version of the file, then add it again with `--replace`  |
-| 2    | unsupported format (or file not found)                 | PDF, images and URLs are not v1 sources: say so and continue with the tabular files            |
-| 3    | conversion needed and LibreOffice missing or failed    | ask the developer to open the file and save it as `.xlsx`, then add the `.xlsx`                |
+| Code | Meaning                                             | What to do                                                                                    |
+|------|-----------------------------------------------------|-----------------------------------------------------------------------------------------------|
+| 0    | done                                                | continue                                                                                      |
+| 1    | same name in `sources/` with other content          | ask the developer whether it is a new version of the file, then add it again with `--replace` |
+| 2    | unsupported format (or file not found)              | PDF, images and URLs are not v1 sources: say so and continue with the tabular files           |
+| 3    | conversion needed and LibreOffice missing or failed | ask the developer to open the file and save it as `.xlsx`, then add the `.xlsx`               |
 
 A new version of a file later: `$S/intake.py add <dir> <path> --replace`. The old file is moved to `sources/previous/<YYYYMMDD-HHMMSS>-<name>` first.
 
@@ -26,6 +26,8 @@ Run `$S/inventory.py <dir>` after every intake (and after every `--replace`). It
 For each sheet the inventory records the header rows (1, or 2 when the second row holds technical codes such as `poids_net`), the number of data rows (empty rows skipped), the merged cells, and for each column its letter, label, code, filled count and rate, distinct count, longest value, kind (`empty`, `boolean`, `date`, `number`, `url`, `html`, `text`) and the first distinct values (`--samples 5` by default). Values are cleaned with the rules of `$S/clean.py` before being counted.
 
 A second header row of technical codes is the preferred column reference (`poids_net` rather than `Poids net du produit` or `G`).
+
+Numbers are read as the file stores them, except two display formats: a date format gives an ISO date (`2023-03-15`), and a number format made of zeros only (`0000000000000` for an EAN, `00000` for a postcode) gives the integer with its leading zeros (`0012345678905`, not `12345678905`).
 
 Flags:
 
