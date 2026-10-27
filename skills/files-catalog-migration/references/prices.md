@@ -80,7 +80,7 @@ Offers are keyed by SKU: fill the missing codes first (`$S/codes.py fill`, `refe
 
 `payload.py` builds one entry per variant and country in the payload `prices` (after the variants in full mode; `$S/payload.py <dir> <handle> --step prices` in module-only mode, after `$S/state.py worklists <dir> --module prices`): `{"sku", "country": "<code>", "body"}`, tax IRI from the country or from shared `tax:<code>:<rate>`. For each entry:
 1. Replace `<variant IRI of <sku>>` in the body with the IRI of the variant with that SKU (the `sku -> variant IRI` map of the core step, or the `variant` items of the product in `state.json`, `ref` = SKU).
-2. `call_operation list_sale_offers` with `query.variant = <variant IRI>` and `query.country = <country IRI>`. An offer exists: record it `reused`, skip.
+2. `call_operation list_sale_offers` with `query.variant = <variant IRI>` and `query.country = <country IRI>`. An offer exists: record it per the created/reused rule of `references/create.md` `## Per product` (`createdAt` at or after `started_at`, or listed `created` in `state.json`: `created`, so that undo still removes it after a crash; older: `reused`), skip.
 3. Else `call_write_operation create_sale_offer` `{"body": <entry body>}`, copied verbatim: `{"variant": <iri>, "country": <iri>, "tax": <iri>, "status": <status>, "taxExcludedPrice": {"amount": "16.58", "currency": "EUR"}, "discountTaxExcludedPrice": null}`, plus `"channels": [...]` only when restricted.
 4. Record a `sale_offer` item with module `prices` and `"ref"` = `<sku>:<code>` (`1001:FR`).
 
