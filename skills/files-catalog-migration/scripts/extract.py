@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Extract a concept from the source files with its mapping (see references/mapping.md).
 
-Usage: extract.py <dir> products|taxonomy|collections|metafields
+Usage: extract.py <dir> products|taxonomy|collections|metafields|metaobjects
 
 products: reads mappings/products.json, mappings/cleaning.json, fixes.json, state.json and the previous
 products.json when present; writes products.json (always regenerated from the source files) and
@@ -15,6 +15,9 @@ collections with their product counts.
 
 metafields: the same with mappings/metafields.json (values from the first row of each product); writes
 concepts/metafields.json and prints the definitions with their types and product counts.
+
+metaobjects: the same with mappings/metaobjects.json (values from the first row of each product); writes
+concepts/metaobjects.json and prints the definitions with their entry and product counts.
 """
 import json
 import os
@@ -31,12 +34,14 @@ import collections_concept
 import describe
 import mapping
 import metafields
+import metaobjects
 import taxonomy
 from intake import sha256
 from mapping import MappingError, evaluate, is_spec, warn
 
-CONCEPTS = ("products", "taxonomy", "collections", "metafields")
-CONCEPT_MODULES = {"taxonomy": taxonomy, "collections": collections_concept, "metafields": metafields}
+CONCEPTS = ("products", "taxonomy", "collections", "metafields", "metaobjects")
+CONCEPT_MODULES = {"taxonomy": taxonomy, "collections": collections_concept, "metafields": metafields,
+                   "metaobjects": metaobjects}
 PRODUCT_FIELDS = ("title", "description_html", "vendor", "tags", "status", "product_category", "images")
 LIST_FIELDS = ("tags", "images")
 VARIANT_FIELDS = ("sku", "barcode", "price", "compare_at_price")
