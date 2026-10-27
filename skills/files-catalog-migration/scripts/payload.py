@@ -166,6 +166,8 @@ def variants(product):
 
 
 def _list_values(value):
+    if isinstance(value, list):
+        return [str(v) for v in value]
     parsed = None
     try:
         parsed = json.loads(value)
@@ -179,6 +181,8 @@ def _list_values(value):
 def transform_value(value, transform):
     if transform not in TRANSFORMS:
         raise PayloadError(f"unknown metafield transform '{transform}', use one of {TRANSFORMS}")
+    if isinstance(value, list) and transform not in (None, "list_json", "list"):
+        raise PayloadError(f"transform '{transform}' does not apply to the list value {value!r}")
     if transform == "list_json":
         return json.dumps(_list_values(value), ensure_ascii=False)
     if transform == "list":
@@ -206,10 +210,14 @@ def metafields(product, state, placeholders=False):
     if decision is None:
         return []
     result = []
+    values = decision.get("values")
     for key, definition in sorted(decision["definitions"].items()):
         definition = definition or {}
-        value = product.get("metafields", {}).get(definition.get("source") or key)
-        if key == "import.key" or value in (None, ""):
+        if values is not None:
+            value = (values.get(product["handle"]) or {}).get(key)
+        else:
+            value = product.get("metafields", {}).get(definition.get("source") or key)
+        if key == "import.key" or value in (None, "", []):
             continue
         shared_key = f"metafield_definition:{key}"
         body = {"definition": shared_iri(state, shared_key, placeholders),
