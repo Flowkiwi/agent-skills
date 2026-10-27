@@ -268,6 +268,15 @@ class PhaseLinesTest(unittest.TestCase):
         self.assertIn("    blocked move SKU 1006: 2230 -> 2226: moved to a product this migration cannot update: "
                       "2226 (unmanaged) (kept on 2230, never deleted)", dryrun.changes_section(diff_data, self.st))
 
+    def test_already_archived_rekeyed_needs_a_snapshot(self):
+        diff_data = {"phase": 2, "changed": {}, "removed": [], "already_archived": ["2226", "2230"],
+                     "removal": {"2226": "removed_action", "2230": "delete_rekeyed"}}
+        self.assertEqual(dryrun.snapshot_handles(diff_data, self.st), ["2230"])
+        state.decide(self.st, "removed_action", {"phase": 2, "action": "delete"}, "developer")
+        self.assertEqual(dryrun.snapshot_handles(diff_data, self.st), ["2226", "2230"])
+        diff_data["removal"]["2226"] = "archive_blocked"
+        self.assertEqual(dryrun.snapshot_handles(diff_data, self.st), ["2230"])
+
 
 if __name__ == "__main__":
     unittest.main()

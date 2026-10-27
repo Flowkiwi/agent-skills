@@ -322,10 +322,13 @@ def removed_action(state: dict):
 
 
 def snapshot_handles(diff_data: dict, state: dict) -> List[str]:
-    """The handles the update run may write: each needs a snapshot of Flowkiwi read in this phase."""
+    """The handles the update run may write: each needs a snapshot of Flowkiwi read in this phase. An already
+    archived handle is written again when it is deleted: rekeyed (removal delete_rekeyed) or removed_action delete."""
     handles = list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or [])
-    if removed_action(state) == "delete":
-        handles += list(diff_data.get("already_archived") or [])
+    removal = diff_data.get("removal") or {}
+    delete = removed_action(state) == "delete"
+    handles += [h for h in diff_data.get("already_archived") or []
+                if removal.get(h) == "delete_rekeyed" or delete and removal.get(h, "removed_action") == "removed_action"]
     return sorted(set(handles))
 
 
