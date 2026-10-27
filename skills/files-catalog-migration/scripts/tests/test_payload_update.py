@@ -375,6 +375,52 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         self.assertEqual(plan["deferred"], [{"sku": "1006", "held_by": "2230"}])
         self.assertNotIn("prices", plan)
 
+    def test_sku_moved_to_an_unmanaged_product_stays(self):
+        countries = [{"code": "FR", "country": "/api/countries/00000000-0000-4000-8000-000000000010",
+                      "tax": "/api/taxes/00000000-0000-4000-8000-000000000011", "currency": "EUR"}]
+        offers = {"2230": {"1005": {"FR": {"taxExcludedPrice": "30.00"}},
+                           "1006": {"FR": {"taxExcludedPrice": "31.00"}}}}
+        state.decide(self.st, "prices", {"offers": offers, "countries": countries}, "developer")
+        self.create("2226")
+        self.st["products"]["2226"]["items"][0]["status"] = "reused"
+        self.create("2230", item("2230", "product_option", "Couleur"), item("2230", "option_value", "Couleur:Noir"),
+                    item("2230", "option_value", "Couleur:Rouge"), item("2230", "sale_offer", "1005:FR", "prices"),
+                    item("2230", "sale_offer", "1006:FR", "prices"))
+        state.start_phase(self.st)
+        duo = product(self.products, "2230")
+        duo["title"], duo["options"] = "Duo", [{"name": "Couleur", "values": ["Noir"]}]
+        product(self.products, "2226")["variants"].append(dict(duo["variants"].pop(), option_values=[]))
+        offers = {"2226": {"1006": {"FR": {"taxExcludedPrice": "31.00"}}},
+                  "2230": {"1005": {"FR": {"taxExcludedPrice": "30.00"}}}}
+        state.decide(self.st, "prices", {"offers": offers, "countries": countries}, "developer")
+        d = checked(diff.diff(self.st, self.products))
+        self.assertEqual(d["moved"], [])
+        self.assertEqual(d["blocked_moves"], [{"sku": "1006", "from": "2230", "to": ["2226"],
+                                               "reason": "moved to a product this migration cannot update: "
+                                                         "2226 (unmanaged)"}])
+        self.assertIn("blocked move SKU 1006: 2230 -> 2226", diff.report(d))
+        plan = payload.update_plan(self.products, self.st, d, "2230")
+        self.assertEqual(plan["product"]["body"], {"title": "Duo"})
+        for group in ("variants", "options", "prices"):
+            self.assertNotIn(group, plan)
+        report = {}
+        self.assertEqual(state.worklists(self.st, 1, None, False, update=True, diff_data=d, report=report),
+                         [["2230"]])
+        self.assertEqual(report["pass"], "updates")
+        state.merge(self.st, [{"handle": "2230", "status": "updated", "iri": product_iri("2230"), "error": None,
+                               "items": [], "deleted": []}], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006"])
+        self.assertEqual([p["sku"] for p in written["prices"]], ["1005", "1006"])
+        self.assertEqual([v["value"] for v in written["options"][0]["values"]], ["Noir", "Rouge"])
+        self.assertEqual(state.worklists(self.st, 1, None, False, update=True, diff_data=d), [])
+        state.start_phase(self.st)
+        d = checked(diff.diff(self.st, self.products))
+        self.assertEqual([m["sku"] for m in d["blocked_moves"]], ["1006"])
+        report = {}
+        self.assertEqual(state.worklists(self.st, 1, None, False, update=True, diff_data=d, report=report), [])
+        self.assertIn("keeps SKU 1006", report["skipped"]["2230"])
+
     def test_stale_diff_in_the_same_phase(self):
         self.create("2226")
         state.start_phase(self.st)

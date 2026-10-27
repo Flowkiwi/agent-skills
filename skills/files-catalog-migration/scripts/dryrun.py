@@ -419,6 +419,9 @@ def changes_section(diff_data, state: dict) -> List[str]:
         lines.append("    and %d more" % (len(changed) - MAX_CHANGED))
     for entry in diff_data.get("moved") or []:
         lines.append("    moved SKU %s: %s -> %s" % (entry["sku"], entry["from"], ", ".join(entry["to"])))
+    for entry in diff_data.get("blocked_moves") or []:
+        lines.append("    blocked move SKU %s: %s -> %s: %s (kept on %s, never deleted)" % (
+            entry["sku"], entry["from"], ", ".join(entry["to"]), entry["reason"], entry["from"]))
     removed = diff_data.get("removed") or []
     lines.append("  removed: %d (action: %s)" % (len(removed), removed_action(state) or "not decided"))
     if removed:

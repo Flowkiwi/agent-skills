@@ -269,10 +269,12 @@ def _resolved(value, shared):
     return value
 
 
-def _change_applied(written, change, shared):
+def _change_applied(written, change, shared, kept=frozenset()):
     """True when the written snapshot already holds every change of a diff.json `changed` entry: an update
-    merged since diff.py ran (a deferred variant is left out of the snapshot, so it is still to do)."""
+    merged since diff.py ran (a deferred variant is left out of the snapshot, so it is still to do). The removal of
+    a `kept` SKU (diff.json blocked_moves), of its prices and of the option values it uses is never applied."""
     import diff  # function-level: diff imports state
+    import payload  # function-level: payload imports state
 
     change = _resolved(change, shared)
     body = (written.get("product") or {}).get("body") or {}
@@ -285,14 +287,22 @@ def _change_applied(written, change, shared):
         "metafields": {e["key"]: e["body"].get("value") for e in written.get("metafields") or []},
         "prices": {f"{e['sku']}:{e['country']}": e["body"] for e in written.get("prices") or []},
     }
+    kept_values = payload.kept_option_values(written, kept)
+
+    def removable(group, key):
+        return not (group == "variants" and key in kept or group == "prices" and key.rsplit(":", 1)[0] in kept)
+
     for group, entries in now.items():
         part = change.get(group, {})
-        if any(k not in entries for k in part.get("added", [])) or any(k in entries for k in part.get("removed", [])):
+        if any(k not in entries for k in part.get("added", [])):
+            return False
+        if any(k in entries and removable(group, k) for k in part.get("removed", [])):
             return False
     options = change.get("options", {})
     if any(v not in now["options"].get(t, []) for t, values in options.get("values_added", {}).items() for v in values):
         return False
-    if any(v in now["options"].get(t, []) for t, values in options.get("values_removed", {}).items() for v in values):
+    if any(v in now["options"].get(t, []) and (t, v) not in kept_values
+           for t, values in options.get("values_removed", {}).items() for v in values):
         return False
     for sku, fields in change.get("variants", {}).get("changed", {}).items():
         if any(now["variants"].get(sku, {}).get(name) != new for name, (_, new) in fields.items()):
@@ -314,7 +324,8 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None, product
     whose action is a deletion. Never selected (in `skipped` with the reason): unmanaged handles, unforced
     conflicts, a deletion whose receiver has an unforced conflict, a failed update without retry_failed, a
     product waiting for a SKU still held by another one, a product receiving a SKU this migration never deletes
-    (moved from an unmanaged product or a reused variant), a handle without snapshot (missing_snapshots); handles
+    (moved from an unmanaged product or a reused variant), a product whose only change is a SKU it keeps (diff.json
+    blocked_moves), a handle without snapshot (missing_snapshots); handles
     already done in this phase are left out. Refused while the conflicts step has not run since diff.py, and, with
     `products` (products.json, or its list of products), when diff.json was computed from other products or
     decisions."""
@@ -339,6 +350,7 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None, product
     conflicts = diff_data.get("conflicts") or {}
     removal = diff_data.get("removal") or {}
     changed = diff_data.get("changed") or {}
+    shared = state.get("shared", {})
 
     def conflicted(handle):
         return handle in conflicts and not forced(state, handle)
@@ -389,14 +401,19 @@ def update_selection(state, diff_data, retry_failed=False, skipped=None, product
         if stuck:
             skipped[handle] = f"receives {', '.join(stuck)}: never deleted by this migration, the SKU cannot move"
             continue
+        kept = payload.blocked_skus(diff_data, handle)
+        written = (product.get("written") or {}).get("payload") or {}
+        if kept and product.get("updated_phase") != phase and _change_applied(written, change, shared, kept):
+            skipped[handle] = (f"keeps SKU {', '.join(sorted(kept))} (diff.json blocked_moves: its receivers cannot "
+                               "be updated), nothing else to write")
+            continue
         giving = [m for m in moved.get(handle, []) if _gives_away(product, [m["sku"]])]
         if giving:
             if not receivers_conflicted(handle, [r for m in giving for r in m.get("to") or []]):
                 first.append(handle)
             continue
         if product.get("updated_phase") == phase:
-            written = (product.get("written") or {}).get("payload") or {}
-            if _change_applied(written, change, state.get("shared", {})):
+            if _change_applied(written, change, shared, kept):
                 continue
             held = [(sku, payload._held_elsewhere(state, handle, sku))
                     for sku in change.get("variants", {}).get("added", [])]
@@ -658,11 +675,43 @@ def _leave_out_unwritten(built, previous, product):
     return built
 
 
+def _keep_undeleted(built, previous, product):
+    """An update run never deletes the variant of a blocked move (diff.json blocked_moves): a variant written before,
+    gone from the payload now and still a created item stays in the snapshot with its prices and option values, so
+    the next diff still finds it to move."""
+    live = {i["ref"] for i in product["items"]
+            if i["kind"] == "variant" and i.get("status") == "created" and i.get("ref")}
+    now = {v["sku"] for v in built.get("variants") or []}
+    kept = [v for v in previous.get("variants") or [] if v["sku"] in live and v["sku"] not in now]
+    if not kept or "variants" not in built:
+        return built
+    skus = {v["sku"] for v in kept}
+    built["variants"] = built["variants"] + kept
+    if "prices" in built:
+        built["prices"] = built["prices"] + [p for p in previous.get("prices") or [] if p["sku"] in skus]
+    titles = [o["title"] for o in previous.get("options") or []]
+    used = {}
+    for variant in kept:
+        for title, value in zip(titles, variant.get("option_values") or []):
+            used.setdefault(title, []).append(value)
+    old_values = {o["title"]: o["values"] for o in previous.get("options") or []}
+    options = {o["title"]: o for o in built.get("options") or []}
+    for title, values in used.items():
+        option = options.get(title)
+        if option is None:
+            continue
+        present = {v["value"] for v in option["values"]}
+        option["values"] = option["values"] + [v for v in old_values[title]
+                                               if v["value"] in values and v["value"] not in present]
+    return built
+
+
 def _snapshot(state, products, handle, line):
     """Record what was written for the product: its payload as payload.py prints it now. An archive run only
     wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json).
     A module-only run only refreshes its part of the previous snapshot (none recorded: none written). An update
-    run keeps the previous entries of the reused children it never wrote and leaves out its deferred variants."""
+    run keeps the previous entries of the reused children it never wrote and of the variants it never deleted
+    (blocked moves), and leaves out its deferred variants."""
     import payload  # function-level: payload imports state
 
     product = state["products"][handle]
@@ -682,6 +731,7 @@ def _snapshot(state, products, handle, line):
             built = payload.build(products, state, handle)
             if line["status"] == "updated" and previous is not None:
                 built = _leave_out_unwritten(_keep_reused(built, previous, product), previous, product)
+                built = _keep_undeleted(built, previous, product)
     except (payload.PayloadError, KeyError, TypeError, ValueError) as error:
         print(f"warning: no written snapshot for {handle}: {error}", file=sys.stderr)
         return

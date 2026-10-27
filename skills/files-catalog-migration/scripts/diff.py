@@ -34,6 +34,9 @@ diff.json:
                     be lost
   moved             [{"sku", "from", "to": [handles]}]: a SKU leaving a product still in products.json for
                     another one; the variant of `from` must be deleted before the creation in `to`
+  blocked_moves     [{"sku", "from", "to": [handles], "reason"}]: a moved SKU whose receivers this migration cannot
+                    update (unmanaged, payload error or no written snapshot): the variant stays on `from`, never
+                    deleted, its SKU would be lost
   unmanaged         changed or removed handles whose product item is reused: never updated, archived or deleted
   unmanaged_items   {"<handle>": [paths]}: changes touching a reused item of the product, left out of `changed`
   no_written        created handles without a written snapshot: cannot be compared
@@ -245,7 +248,7 @@ def diff(state_data, products):
     entries = state_data.get("products", {})
     result = {"phase": state_data.get("phase", 1), "new": [], "changed": {}, "unchanged": 0, "removed": [],
               "already_archived": [], "rekeyed": [], "removal": {}, "unmanaged": [], "unmanaged_items": {},
-              "blocked_rekeys": {}, "moved": [], "no_written": [], "errors": {}, "conflicts": {},
+              "blocked_rekeys": {}, "moved": [], "blocked_moves": [], "no_written": [], "errors": {}, "conflicts": {},
               "missing_snapshots": [], "snapshots": {}, "conflicts_checked": False,
               "source": source_fingerprint(state_data, products)}
 
@@ -322,8 +325,18 @@ def diff(state_data, products):
                 result["removal"][handle] = "delete_rekeyed"
         else:
             result["removal"][handle] = "removed_action"
-    result["moved"] = [{"sku": sku, "from": handle, "to": holders[sku]}
-                       for handle, sku in departures if sku in holders]
+    for handle, sku in departures:
+        if sku not in holders:
+            continue
+        entry = {"sku": sku, "from": handle, "to": holders[sku]}
+        stuck = [h for h in holders[sku] if h in not_updatable]
+        if len(stuck) == len(holders[sku]):
+            # deleting it in `from` would remove the SKU from Flowkiwi while no receiver ever creates it
+            entry["reason"] = ("moved to a product this migration cannot update: "
+                               + ", ".join(f"{h} ({not_updatable[h]})" for h in stuck))
+            result["blocked_moves"].append(entry)
+        else:
+            result["moved"].append(entry)
     return result
 
 
@@ -444,6 +457,9 @@ def report(result):
         lines.append(f"blocked rekey {handle}: {reason}")
     for entry in result["moved"]:
         lines.append(f"moved SKU {entry['sku']}: {entry['from']} -> {', '.join(entry['to'])}")
+    for entry in result["blocked_moves"]:
+        lines.append(f"blocked move SKU {entry['sku']}: {entry['from']} -> {', '.join(entry['to'])}: "
+                     f"{entry['reason']} (kept on {entry['from']}, never deleted)")
     if result["unmanaged"]:
         lines.append(f"unmanaged (reused, never written): {', '.join(result['unmanaged'])}")
     for handle, paths in result["unmanaged_items"].items():

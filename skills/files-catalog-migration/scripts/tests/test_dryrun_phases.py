@@ -238,5 +238,21 @@ class DryRunPhasesTest(unittest.TestCase):
         self.assertNotIn("Changes (phase", dryrun.report(self.dir)[0])
 
 
+class PhaseLinesTest(unittest.TestCase):
+    """Changes and blocking lines of a later phase from a given diff.json."""
+
+    def setUp(self):
+        self.st = state.init("demo", "https://demo.invalid/api/mcp", {"products": [{"handle": "2226"},
+                                                                                {"handle": "2230"}]})
+        state.start_phase(self.st)
+
+    def test_blocked_move_is_listed(self):
+        diff_data = {"phase": 2, "changed": {"2230": {"variants": {"removed": ["1006"]}}}, "unmanaged": ["2226"],
+                     "blocked_moves": [{"sku": "1006", "from": "2230", "to": ["2226"],
+                                        "reason": "moved to a product this migration cannot update: 2226 (unmanaged)"}]}
+        self.assertIn("    blocked move SKU 1006: 2230 -> 2226: moved to a product this migration cannot update: "
+                      "2226 (unmanaged) (kept on 2230, never deleted)", dryrun.changes_section(diff_data, self.st))
+
+
 if __name__ == "__main__":
     unittest.main()

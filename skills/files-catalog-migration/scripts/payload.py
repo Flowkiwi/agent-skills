@@ -45,7 +45,8 @@ SKU is still a created variant of another product (diff.json moved, rekeyed, two
 out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
 `held_by` is merged, print the plan again: children already deleted or recorded are left out, so it only holds
 what is still to do (and the field updates, sent again as they are). A product never deletes a SKU (rekeyed
-deletion, `from` side of a moved SKU) while a product receiving it has an unforced conflict.
+deletion, `from` side of a moved SKU) while a product receiving it has an unforced conflict, nor a SKU of diff.json
+blocked_moves (no receiver can create it): that variant, its prices and the option values it uses stay.
 """
 
 import argparse
@@ -391,7 +392,14 @@ def _product_update(change, now):
     return {"body": {name: body.get(name, _cleared(name)) for name in fields}}
 
 
-def _options_update(change, now, children):
+def kept_option_values(written, kept):
+    """(option title, value) pairs used by the variants of `kept` SKUs in a written payload."""
+    titles = [o["title"] for o in written.get("options") or []]
+    return {(title, value) for v in written.get("variants") or [] if v["sku"] in kept
+            for title, value in zip(titles, v.get("option_values") or [])}
+
+
+def _options_update(change, now, children, kept_values=frozenset()):
     options = change.get("options", {})
     handle = children.handle
     current = {o["title"]: o for o in now.get("options") or []}
@@ -412,12 +420,14 @@ def _options_update(change, now, children):
     for title, values in options.get("values_removed", {}).items():
         in_use = used.get(_now(current, title, handle, "option")["position"], set())
         for value in values:
-            iri = children.target("option_value", f"{title}:{value}") if value not in in_use else None
+            if value in in_use or (title, value) in kept_values:
+                continue
+            iri = children.target("option_value", f"{title}:{value}")
             if iri:
                 group["values_delete"].append({"iri": iri, "option": title, "value": value})
     for title in options.get("removed", []):
         iri = children.target("product_option", title)
-        if iri is None:
+        if iri is None or any(t == title for t, _ in kept_values):
             continue
         group["values_delete"] += [{"iri": value_iri, "option": title, "value": ref.split(":", 1)[1]}
                                    for ref, value_iri in children.created("option_value", f"{title}:")]
@@ -425,7 +435,7 @@ def _options_update(change, now, children):
     return group
 
 
-def _variants_update(change, now, children):
+def _variants_update(change, now, children, kept=frozenset()):
     variants = change.get("variants", {})
     handle = children.handle
     current = {v["sku"]: v for v in now.get("variants") or []}
@@ -433,7 +443,7 @@ def _variants_update(change, now, children):
              "create": [_now(current, sku, handle, "variant") for sku in variants.get("added", [])
                         if not children.exists("variant", sku)]}
     for sku in variants.get("removed", []):
-        iri = children.target("variant", sku)
+        iri = children.target("variant", sku) if sku not in kept else None
         if iri:
             group["delete"].append({"iri": iri, "sku": sku})
     for sku, fields in variants.get("changed", {}).items():
@@ -450,15 +460,16 @@ def _variants_update(change, now, children):
     return group
 
 
-def _keyed_update(change, entries, children, kind, key, field):
-    """delete / update / create of a keyed group (metafields by namespace.key, prices by <sku>:<country>)."""
+def _keyed_update(change, entries, children, kind, key, field, kept=frozenset()):
+    """delete / update / create of a keyed group (metafields by namespace.key, prices by <sku>:<country>); `kept`
+    are the refs never deleted (the offers of a variant kept by a blocked move)."""
     current = {key(e): e for e in entries}
     handle = children.handle
     group = {"delete": [], "update": [],
              "create": [_now(current, k, handle, kind) for k in change.get("added", [])
                         if not children.exists(kind, k)]}
     for ref in change.get("removed", []):
-        iri = children.target(kind, ref)
+        iri = children.target(kind, ref) if ref not in kept else None
         if iri:
             group["delete"].append({"iri": iri, field: ref})
     for ref, (old, _) in change.get("changed", {}).items():
@@ -490,18 +501,26 @@ def _held_elsewhere(state, handle, sku):
     return None
 
 
+def blocked_skus(diff_data, handle):
+    """SKUs of diff.json blocked_moves that `handle` keeps: never deleted, their receivers cannot create them."""
+    return {m["sku"] for m in diff_data.get("blocked_moves") or [] if m.get("from") == handle}
+
+
 def _changed_plan(products, state, diff_data, handle, entry):
     change = diff_data["changed"][handle]
     now = build(products, state, handle)
     children = _Children(handle, entry)
     plan = {"handle": handle, "action": "update", "iri": entry["iri"], "product": _product_update(change, now)}
+    kept = blocked_skus(diff_data, handle)
+    written = (entry.get("written") or {}).get("payload") or {}
+    kept_offers = {ref for ref in change.get("prices", {}).get("removed", []) if ref.rsplit(":", 1)[0] in kept}
     groups = {
-        "options": _options_update(change, now, children),
-        "variants": _variants_update(change, now, children),
+        "options": _options_update(change, now, children, kept_option_values(written, kept)),
+        "variants": _variants_update(change, now, children, kept),
         "metafields": _keyed_update(change.get("metafields", {}), now.get("metafields") or [], children,
                                     "metafield", lambda e: e["key"], "key"),
         "prices": _keyed_update(change.get("prices", {}), now.get("prices") or [], children,
-                                "sale_offer", lambda e: f"{e['sku']}:{e['country']}", "ref"),
+                                "sale_offer", lambda e: f"{e['sku']}:{e['country']}", "ref", kept_offers),
     }
     deleted = {v["sku"] for v in groups["variants"]["delete"]}
     for moved in diff_data.get("moved") or []:
