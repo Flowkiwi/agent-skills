@@ -2,11 +2,17 @@
 
 Usage:
   python3 diff.py <dir>
+  python3 diff.py conflicts <dir>
 
 Reads products.json and state.json, writes <dir>/diff.json and prints the counts, then one line per changed
 handle with its changed paths. The payload written for each product (state `written`, recorded by
 state.py merge) is compared with payload.py's payload now, `<key IRI>` placeholders for shared elements not
 recorded yet (a new shared element is a real change).
+
+`conflicts` compares, for each handle of `changed` and `removed`, what the last import wrote with the
+Flowkiwi read-back snapshot <dir>/tmp/remote/<handle>.json (`{"product": <get_product response>,
+"variants": [<list_product_variants items>], "metafields": [<list_metafields items>]}`), fills `conflicts`
+and `missing_snapshots` in diff.json and prints them. A field absent from the snapshot is not compared.
 
 diff.json:
   phase             the state phase the difference was computed for
@@ -27,8 +33,9 @@ diff.json:
   unmanaged_items   {"<handle>": [paths]}: changes touching a reused item of the product, left out of `changed`
   no_written        created handles without a written snapshot: cannot be compared
   errors            {"<handle>": "<message>"}: payload.py cannot build the product now
-  conflicts         filled by the conflicts step
-  missing_snapshots filled by the conflicts step
+  conflicts         {"<handle>": {"<path>": {"written", "flowkiwi"}}}: modified in Flowkiwi since the last import
+                    (filled by the conflicts step; never updated, archived or deleted unless forced)
+  missing_snapshots handles of changed or removed without a snapshot (filled by the conflicts step)
 Deleted handles never appear.
 """
 
@@ -38,7 +45,7 @@ import sys
 import tempfile
 
 import payload
-import state  # noqa: F401  (phase decisions of the conflicts step)
+import state
 import verify
 
 PRODUCT_FIELDS = ("title", "description", "tags", "status", "category", "attributes", "collections")
@@ -69,7 +76,7 @@ def _view(name, value):
         tags = value.split(",") if isinstance(value, str) else (value or [])
         return sorted(t.strip() for t in tags if t and t.strip())
     if name == "attributes":
-        pairs = [(_iri(a.get("definition")), _iri(a["option"]) if "option" in a else a.get("value"))
+        pairs = [(_iri(a.get("definition")), _iri(a["option"]) if a.get("option") is not None else a.get("value"))
                  for a in value or []]
         return sorted(pairs, key=lambda pair: json.dumps(pair, sort_keys=True, ensure_ascii=False))
     if name == "collections":
@@ -294,6 +301,94 @@ def diff(state_data, products):
     return result
 
 
+def _plain(value):
+    if isinstance(value, dict):
+        return value["@id"] if "@id" in value else {k: _plain(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_plain(v) for v in value]
+    return value
+
+
+def _numbers(value, nested=False):
+    """Numbers compare as numbers: 1.8, "1.8" and 1.80 are one value, 2 and 2.0 too."""
+    if nested and isinstance(value, str):
+        try:
+            parsed = json.loads(value)
+        except ValueError:
+            parsed = None
+        if isinstance(parsed, (int, float)) and not isinstance(parsed, bool):
+            value = parsed
+    if isinstance(value, float) and value.is_integer():
+        return int(value)
+    if isinstance(value, list):
+        return [_numbers(v, True) for v in value]
+    if isinstance(value, dict):
+        return {k: _numbers(v, True) for k, v in value.items()}
+    return value
+
+
+def _json_text(value):
+    """A metafield value as JSON text: a string holding JSON is parsed first, IRIs as objects become IRIs."""
+    value = _plain(value)
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except ValueError:
+            pass
+    return json.dumps(_numbers(value), sort_keys=True, ensure_ascii=False)
+
+
+def _variants_view(variants):
+    return {v["sku"]: v.get("barcode") or None for v in variants or [] if isinstance(v, dict) and v.get("sku")}
+
+
+def _metafields_view(entries):
+    return {_iri(e.get("definition")): _json_text(e.get("value")) for e in entries if isinstance(e, dict)}
+
+
+def written_view(written):
+    """What the last import wrote (a payload.build output); fields the payload leaves out when empty are empty."""
+    body = (written.get("product") or {}).get("body") or {}
+    view = {name: _view(name, body.get(name)) for name in PRODUCT_FIELDS}
+    if "variants" in written:
+        view["variants"] = _variants_view(written["variants"])
+    entries = [written["marker"]] if written.get("marker") else []
+    entries += written.get("metafields") or []
+    view["metafields"] = _metafields_view([e.get("body") or {} for e in entries])
+    return view
+
+
+def remote_view(snapshot):
+    """The Flowkiwi read-back snapshot in the shape of written_view; a key absent from it stays absent."""
+    product = snapshot.get("product") or {}
+    view = {name: _view(name, product[name]) for name in PRODUCT_FIELDS if name in product}
+    if "variants" in snapshot:
+        view["variants"] = _variants_view(snapshot["variants"])
+    if "metafields" in snapshot:
+        view["metafields"] = _metafields_view(snapshot["metafields"] or [])
+    return view
+
+
+def conflicts(written, remote):
+    """{"<path>": {"written", "flowkiwi"}} for the keys of both views that differ; in the variant and metafield
+    maps an entry on one side only is a difference too (null on the other side)."""
+    found = {}
+    for name, value in written.items():
+        if name not in remote:
+            continue
+        if name in ("variants", "metafields"):
+            other = remote[name]
+            for key in list(value) + [k for k in other if k not in value]:
+                if key not in value or key not in other or value[key] != other[key]:
+                    found[f"{name}.{key}"] = {"written": value.get(key), "flowkiwi": other.get(key)}
+        elif value != remote[name]:
+            found[name] = {"written": value, "flowkiwi": remote[name]}
+    return found
+
+
+forced = state.forced
+
+
 def _read_json(path):
     with open(path, encoding="utf-8") as f:
         return json.load(f)
@@ -330,10 +425,68 @@ def report(result):
     return "\n".join(lines)
 
 
+def conflicts_report(diff_data, state_data, not_compared):
+    found, missing = diff_data["conflicts"], diff_data["missing_snapshots"]
+    lines = [f"conflicts: {len(found)} modified in Flowkiwi since the last import, {len(missing)} snapshot(s) missing"]
+    for handle, paths in found.items():
+        label = f"{handle} (forced)" if forced(state_data, handle) else handle
+        lines.append(f"  {label}: {', '.join(paths)}")
+    if missing:
+        lines.append(f"missing snapshots: {', '.join(missing)}")
+    if not_compared:
+        lines.append(f"no written snapshot, not compared: {', '.join(not_compared)}")
+    return "\n".join(lines)
+
+
+def conflicts_main(args):
+    if len(args) != 1 or args[0].startswith("-"):
+        print("usage: diff.py conflicts <dir>", file=sys.stderr)
+        return 2
+    directory = args[0]
+    diff_path = os.path.join(directory, "diff.json")
+    try:
+        diff_data = _read_json(diff_path)
+        state_data = _read_json(os.path.join(directory, "state.json"))
+    except (OSError, ValueError) as error:
+        print(f"error: {error}", file=sys.stderr)
+        return 1
+    if diff_data.get("phase") != state_data.get("phase", 1):
+        print(f"error: diff.json is from phase {diff_data.get('phase')}, run diff.py again", file=sys.stderr)
+        return 1
+    found, missing, not_compared = {}, [], []
+    for handle in list(diff_data.get("changed") or {}) + list(diff_data.get("removed") or []):
+        path = os.path.join(directory, "tmp", "remote", f"{handle}.json")
+        if not os.path.exists(path):
+            missing.append(handle)
+            continue
+        try:
+            snapshot = _read_json(path)
+        except (OSError, ValueError) as error:
+            print(f"error: {path}: {error}", file=sys.stderr)
+            return 1
+        if not isinstance(snapshot, dict) or not isinstance(snapshot.get("product"), dict):
+            print(f"error: {path}: expected {{\"product\": {{...}}, \"variants\": [...], \"metafields\": [...]}}",
+                  file=sys.stderr)
+            return 1
+        written = ((state_data.get("products", {}).get(handle) or {}).get("written") or {}).get("payload")
+        if not written:
+            not_compared.append(handle)
+            continue
+        changes = conflicts(written_view(written), remote_view(snapshot))
+        if changes:
+            found[handle] = changes
+    diff_data["conflicts"], diff_data["missing_snapshots"] = found, missing
+    _write_json(diff_path, diff_data)
+    print(conflicts_report(diff_data, state_data, not_compared))
+    return 0
+
+
 def main(argv):
     args = argv[1:]
+    if args and args[0] == "conflicts":
+        return conflicts_main(args[1:])
     if len(args) != 1 or args[0].startswith("-"):
-        print("usage: diff.py <dir>", file=sys.stderr)
+        print("usage: diff.py <dir> | diff.py conflicts <dir>", file=sys.stderr)
         return 2
     directory = args[0]
     try:
