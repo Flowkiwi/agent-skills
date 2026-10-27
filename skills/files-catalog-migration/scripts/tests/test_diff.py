@@ -105,7 +105,7 @@ class DiffTest(unittest.TestCase):
         d = diff.diff(self.st, self.products)
         self.assertEqual(d["unmanaged"], ["2226"])
         self.assertEqual(d["rekeyed"], [{"removed": "2230", "new": [], "skus": ["1005", "1006"], "changed": ["2226"]}])
-        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["removal"], {"2230": "archive_blocked"})
         self.assertEqual(d["blocked_rekeys"],
                          {"2230": "rekey into a product this migration cannot update: 2226 (unmanaged)"})
         self.assertIn("blocked rekey 2230: rekey into a product this migration cannot update: 2226 (unmanaged)",
@@ -116,7 +116,7 @@ class DiffTest(unittest.TestCase):
         self.products["products"][0]["variants"][1]["option_values"] = [None]
         d = diff.diff(self.st, self.products)
         self.assertEqual(list(d["errors"]), ["2226"])
-        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["removal"], {"2230": "archive_blocked"})
         self.assertEqual(d["blocked_rekeys"],
                          {"2230": "rekey into a product this migration cannot update: 2226 (payload error)"})
 
@@ -124,7 +124,7 @@ class DiffTest(unittest.TestCase):
         del self.st["products"]["2226"]["written"]
         self.regroup_into_2226()
         d = diff.diff(self.st, self.products)
-        self.assertEqual(d["removal"], {"2230": "removed_action"})
+        self.assertEqual(d["removal"], {"2230": "archive_blocked"})
         self.assertEqual(d["blocked_rekeys"],
                          {"2230": "rekey into a product this migration cannot update: 2226 (no written snapshot)"})
 

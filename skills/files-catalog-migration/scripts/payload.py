@@ -35,7 +35,8 @@ with transform null (value as is), list_json, list, number, json or strip_html. 
   create. Existing children are the `created` items of the state by `ref`; a reused child is never written.
 - removed: {"handle", "action": "archive", "iri", "product": {"body": {"status": ARCHIVED}}} or
   {"handle", "action": "delete", "steps": <undo plan of product:<handle>>}, from decision removed_action of
-  the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey.
+  the phase; a rekeyed product (diff.json removal delete_rekeyed) is always deleted, after confirmed_rekey, and a
+  blocked rekey (removal archive_blocked) is always archived, whatever removed_action says.
 A product modified in Flowkiwi (diff.json conflicts) needs decision force_update of the phase. A new variant whose
 SKU is still a created variant of another product (diff.json moved, rekeyed, two products swapping SKUs) is left
 out of the creations with its prices and listed in "deferred": [{"sku", "held_by"}]; once the deletion in
@@ -538,13 +539,16 @@ def _check_receivers(state, diff_data, handle, skus, receivers):
 
 def _removed_plan(state, diff_data, handle, entry):
     phase = state.get("phase", 1)
-    if (diff_data.get("removal") or {}).get(handle) == "delete_rekeyed":
+    removal = (diff_data.get("removal") or {}).get(handle)
+    if removal == "delete_rekeyed":
         if state_module.phase_decision(state, "confirmed_rekey") is None:
             raise PayloadError(f"rekeyed products need decision confirmed_rekey for phase {phase}")
         for rekey in diff_data.get("rekeyed") or []:
             if rekey.get("removed") == handle:
                 _check_receivers(state, diff_data, handle, rekey.get("skus") or [], rekey.get("changed") or [])
         action = "delete"
+    elif removal == "archive_blocked":
+        action = "archive"
     else:
         decision = state_module.phase_decision(state, "removed_action")
         action = decision.get("action") if isinstance(decision, dict) else None

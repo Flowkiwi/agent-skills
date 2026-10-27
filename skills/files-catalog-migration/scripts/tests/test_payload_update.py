@@ -394,6 +394,23 @@ class UpdatePlanDetailsTest(unittest.TestCase):
         plan = self.plan("2230")
         self.assertEqual((plan["action"], plan["steps"][-1]["kind"]), ("delete", "product"))
 
+    def test_blocked_rekey_is_archived_never_deleted(self):
+        self.create("2226")
+        self.create("2230")
+        state.start_phase(self.st)
+        self.st["products"]["2226"]["items"][0]["status"] = "reused"
+        duo = product(self.products, "2230")
+        product(self.products, "2226")["variants"] += [dict(v, option_values=[]) for v in duo["variants"]]
+        self.products["products"] = [product(self.products, "2226")]
+        d = diff.diff(self.st, self.products)
+        self.assertEqual(d["removal"], {"2230": "archive_blocked"})
+        archive = {"handle": "2230", "action": "archive", "iri": product_iri("2230"),
+                   "product": {"body": {"status": "/api/statuses/ARCHIVED"}}}
+        self.assertEqual(payload.update_plan(self.products, self.st, d, "2230"), archive)
+        state.decide(self.st, "removed_action", {"phase": 2, "action": "delete"}, "developer")
+        state.decide(self.st, "confirmed_rekey", {"phase": 2}, "developer")
+        self.assertEqual(payload.update_plan(self.products, self.st, d, "2230"), archive)
+
     def test_already_archived_selected_only_for_delete(self):
         self.create("2230")
         gone = {"products": [product(self.products, "2226")], "warnings": []}

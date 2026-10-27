@@ -25,12 +25,13 @@ diff.json:
   rekeyed           [{"removed", "new": [handles], "skus": [skus], "changed"?: [handles]}]: a removed (or already
                     archived) handle whose written SKUs are now held by other products (a grouping change):
                     new handles, and in `changed` the created ones that gain those SKUs (variants.added)
-  removal           {"<removed or already archived handle>": "delete_rekeyed" | "removed_action"}: a rekeyed
-                    handle is always deleted, only after decision confirmed_rekey of the phase, before the update
-                    of its `changed` handles and before the creation of its new handles; the others (blocked
-                    rekeys included) follow decision removed_action
+  removal           {"<removed or already archived handle>": "delete_rekeyed" | "archive_blocked" |
+                    "removed_action"}: a rekeyed handle is always deleted, only after decision confirmed_rekey of
+                    the phase, before the update of its `changed` handles and before the creation of its new
+                    handles; a blocked rekey is always archived; the others follow decision removed_action
   blocked_rekeys    {"<removed handle>": "<reason>"}: a rekey into a product this migration cannot update
-                    (unmanaged, payload error or no written snapshot): not deleted, its SKUs would be lost
+                    (unmanaged, payload error or no written snapshot): archived, never deleted, its SKUs would
+                    be lost
   moved             [{"sku", "from", "to": [handles]}]: a SKU leaving a product still in products.json for
                     another one; the variant of `from` must be deleted before the creation in `to`
   unmanaged         changed or removed handles whose product item is reused: never updated, archived or deleted
@@ -308,7 +309,7 @@ def diff(state_data, products):
                 # deleting it would remove the SKUs from Flowkiwi while the target never receives them
                 result["blocked_rekeys"][handle] = ("rekey into a product this migration cannot update: "
                                                     + ", ".join(stuck))
-                result["removal"][handle] = "removed_action"
+                result["removal"][handle] = "archive_blocked"
             else:
                 result["removal"][handle] = "delete_rekeyed"
         else:
