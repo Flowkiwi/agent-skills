@@ -8,6 +8,7 @@ from contextlib import redirect_stderr
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+import diff  # noqa: E402
 import dryrun  # noqa: E402
 import state  # noqa: E402
 from phase_helpers import (created_line, make_products, make_state, product_iri, read_json, run_cli,  # noqa: E402
@@ -169,6 +170,41 @@ class PhaseDetailsTest(unittest.TestCase):
         state.merge(self.st, [dict(created_line("2226"), status="failed", items=[], error="variant 422")], self.products)
         p = self.st["products"]["2226"]
         self.assertEqual((p["status"], p["error"], p["written"]["phase"]), ("created", "variant 422", 1))
+
+    def test_updated_line_keeps_reused_children_as_written(self):
+        state.merge(self.st, [created_line("2230")], self.products)
+        self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["title"] = "Duo"
+        duo["variants"][1]["barcode"] = "3601234560999"
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual(written["product"]["body"]["title"], "Duo")
+        self.assertEqual({v["sku"]: v["barcode"] for v in written["variants"]},
+                         {"1005": "3601234560050", "1006": "3601234560067"})
+        self.assertEqual(diff.diff(self.st, self.products)["unmanaged_items"],
+                         {"2230": ["variants.changed.1006.barcode"]})
+
+    def test_updated_line_keeps_a_removed_reused_child(self):
+        state.merge(self.st, [created_line("2230")], self.products)
+        self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["variants"] = duo["variants"][:1]
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006"])
+        self.assertEqual(diff.diff(self.st, self.products)["unmanaged_items"], {"2230": ["variants.removed.1006"]})
+
+    def test_created_line_snapshot_unchanged_with_reused_children(self):
+        line = created_line("2230")
+        line["items"][2]["status"] = "reused"
+        state.merge(self.st, [line], self.products)
+        self.products["products"][1]["variants"][1]["barcode"] = "3601234560999"
+        state.merge(self.st, [dict(created_line("2230"), items=[])], self.products)
+        barcodes = {v["sku"]: v["barcode"] for v in self.st["products"]["2230"]["written"]["payload"]["variants"]}
+        self.assertEqual(barcodes["1006"], "3601234560999")
 
     def test_removed_flag_cleared_when_back(self):
         state.merge(self.st, [created_line("2226")], self.products)

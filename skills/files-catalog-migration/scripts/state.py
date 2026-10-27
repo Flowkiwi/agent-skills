@@ -338,10 +338,42 @@ def _module_part(payload, written, products, state, handle, module):
     return written
 
 
+def _keep_reused(built, previous, product):
+    """An update run never writes a reused child: its entries of the snapshot stay as previously written
+    (gone from the payload now included), so the next diff still lists them unmanaged."""
+    reused = {(i["kind"], i["ref"]) for i in product["items"] if i.get("status") == "reused" and i.get("ref")}
+    if not reused:
+        return built
+
+    def keep(kind, new, old, key):
+        before = {key(e): e for e in old or []}
+        after = {key(e) for e in new or []}
+        result = [before.get(key(e), e) if (kind, key(e)) in reused else e for e in new or []]
+        return result + [e for k, e in before.items() if (kind, k) in reused and k not in after]
+
+    for name, kind, key in (("variants", "variant", lambda e: e["sku"]),
+                            ("metafields", "metafield", lambda e: e["key"]),
+                            ("prices", "sale_offer", lambda e: f"{e['sku']}:{e['country']}")):
+        if name in built:
+            built[name] = keep(kind, built[name], previous.get(name), key)
+    if "options" in built:
+        old_options = {o["title"]: o for o in previous.get("options") or []}
+        options = keep("product_option", built["options"], previous.get("options"), lambda o: o["title"])
+        for option in options:
+            title = option["title"]
+            if ("product_option", title) not in reused or title not in old_options:
+                old_values = (old_options.get(title) or {}).get("values")
+                option["values"] = keep("option_value", option["values"], old_values,
+                                        lambda v, t=title: f"{t}:{v['value']}")
+        built["options"] = options
+    return built
+
+
 def _snapshot(state, products, handle, line):
     """Record what was written for the product: its payload as payload.py prints it now. An archive run only
     wrote the status: the previous snapshot is kept with status ARCHIVED (the handle is gone from products.json).
-    A module-only run only refreshes its part of the previous snapshot (none recorded: none written)."""
+    A module-only run only refreshes its part of the previous snapshot (none recorded: none written). An update
+    run keeps the previous entries of the reused children it never wrote."""
     import payload  # function-level: payload imports state
 
     product = state["products"][handle]
@@ -359,6 +391,8 @@ def _snapshot(state, products, handle, line):
             built = _module_part(payload, written, products, state, handle, line["module"])
         else:
             built = payload.build(products, state, handle)
+            if line["status"] == "updated" and previous is not None:
+                built = _keep_reused(built, previous, product)
     except (payload.PayloadError, KeyError, TypeError, ValueError) as error:
         print(f"warning: no written snapshot for {handle}: {error}", file=sys.stderr)
         return
