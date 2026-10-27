@@ -418,6 +418,12 @@ class SharedScopeTest(unittest.TestCase):
             with self.assertRaises(ValueError):
                 state.undo_plan(self.state, scope)
 
+    def test_marker_scope_is_refused(self):
+        with self.assertRaises(ValueError) as error:
+            state.undo_plan(self.state, "shared:metafield_definition:import.key")
+        self.assertIn("use all or module:core", str(error.exception))
+        self.assertEqual(state.check_scope("module:core"), "module:core")
+
     def test_shared_key_validation(self):
         state.validate_result(line("a", items=[dict(item("metafield", iri("metafields", "x")), shared=self.KEY)]))
         with self.assertRaises(ValueError):

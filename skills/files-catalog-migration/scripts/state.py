@@ -285,8 +285,14 @@ def _kind_rank(kind):
     return KIND_ORDER.index(kind) if kind in KIND_ORDER else len(KIND_ORDER)
 
 
+MARKER_KEY = "metafield_definition:import.key"
+
+
 def check_scope(scope):
     kind, _, name = scope.partition(":")
+    if kind == "shared" and name == MARKER_KEY:
+        raise ValueError(f"Undo scope '{scope}' would delete the marker definition and every import.key marker: "
+                         "no product could be found again by marker. To remove everything, use all or module:core")
     if scope in ("all", "pilot") or (kind in ("module", "shared") and name):
         return scope
     raise ValueError(f"Unknown undo scope '{scope}': use all, pilot, module:<name> or shared:<key>")
