@@ -1,0 +1,181 @@
+# Workspace and state
+
+## Layout
+
+```
+migrations/<client-slug>/
+├── sources/            # client files copied by intake.py (never modified); previous/: replaced versions
+├── inventory.json      # files, sheets, header rows, columns with samples and flags (inventory.py)
+├── mappings/           # <concept>.json: validated mappings (the source of truth); cleaning.json
+├── products.json       # products and variants (extract.py, then codes.py fill)
+├── concepts/           # structured files of the later concepts (taxonomy, collections...): not in this version
+├── fixes.json          # renames, skips, field fixes and generated keys, replayed on every extract
+├── state.json          # decisions with their origin, shared elements, per-product progress
+├── client-review.md    # questions for the client and choices made for them: not written by this version yet
+├── worklists/          # worker-<n>.json: handles assigned to each worker
+├── results/            # worker-<n>.jsonl: one result line per product, written by workers
+│                       # rejected-<stamp>.jsonl: lines refused by merge, with the reason; merged/: merged files
+├── verify-sample.json  # handles whose description is checked after creation (verify.py sample)
+├── tmp/                # worker-<n>/ and shared/: each worker's own temporary files (line.json, readback.txt)
+└── undo/               # deleted-<timestamp>.json: IRIs deleted by an undo run
+```
+
+What is kept are the mappings and the decisions, never files changed by hand: `products.json` can be rebuilt at any time with `extract.py`. All script commands below take the workspace folder as `<dir>`.
+
+## inventory.json
+
+```json
+{"version": 1, "files": [{"file": "demo-catalogue.xlsx", "sha256": "a84d...", "sheets": [
+  {"sheet": "Catalogue", "hidden": false, "header_rows": 2, "rows": 7, "merged": [],
+   "columns": [{"letter": "H", "label": "[Dimensions] Poids Net (kg)", "code": "dim_poids_net", "filled": 5,
+                "fill_rate": 0.71, "distinct": 4, "max_length": 3, "kind": "number", "samples": ["1.8", "2.6"],
+                "flags": [{"flag": "similar_label", "with": "G", "conflicts": 1}]}]}]}]}
+```
+
+Kinds and flags are described in `references/sources.md`. `code` is the second header row (technical code) or `null`.
+
+## mappings/
+
+`<concept>.json`: one file per concept (`products.json` first), format in `references/mapping.md`. Every spec may carry `origin`, `reason` and `question`; `dryrun.py` lists the `agent` ones.
+
+`cleaning.json` (optional): the cleaning rules changed for this client, applied by `extract.py` (the inventory always uses the default rules):
+
+```json
+{"disabled": ["dash"], "replacements": {"Ø": "diamètre "}}
+```
+
+`disabled` lists rule ids of `clean.py table` (or `custom` to turn the replacements off); `replacements` are exact text replacements applied before the rules.
+
+## products.json
+
+`{"version": 1, "products": [...], "warnings": [...], "cleaning": {"quote": 2}, "sources": {"main": {"file", "sheet", "sha256"}}, "metafield_columns": {}}`. One entry per product (`row` is its first sheet row, `rows` every row per source id):
+
+```json
+{
+  "handle": "2230", "key": "2230", "row": 8, "rows": {"main": [8, 9]},
+  "title": "Grille-pain Duo", "description_html": "<p>...</p>", "description_origin": "source",
+  "vendor": "TOASTINE", "type": null, "product_category": "Catalogue/PEM/Grille-pain",
+  "tags": [], "status": null, "published": null,
+  "options": [{"name": "Couleur", "values": ["Noir", "Rouge"]}],
+  "variants": [{"sku": "1005", "sku_generated": false, "barcode": "3601234560050", "barcode_generated": false,
+                "option_values": ["Noir"], "price": "49.90", "compare_at_price": null, "cost": null,
+                "grams": null, "taxable": null, "market_prices": {}}],
+  "images": ["https://example.com/img/1005.jpg"], "metafields": {}
+}
+```
+
+- `key` is the client reference value, `handle` its slug (the `import.key` marker value).
+- `description_origin`: `source`, `generated` (approved generation; the poor one is kept in `description_source`) or `null`. `description_candidate`: the generated description waiting for approval.
+- `cleaning`: number of replacements per cleaning rule, over the cells the mapping read.
+- `sources`: the files read, with their SHA-256, to detect a new version.
+
+Warning entry: `{"row": 6, "handle": "1004", "code": "conflict", "field": "variant.price", "message": "...", "stage": "extract"}`. `stage` is `extract` (mapping and extraction) or `validate` (recomputed by `catalog.py` on every run). Codes and how to settle them: `references/products.md` `## Warnings`.
+
+## fixes.json
+
+Every change that the mapping cannot express, replayed by `extract.py` on every extraction:
+
+```json
+{"skus": {"2228": {"OLD-SKU": "NEW-SKU"}}, "option_names": {"*": {"couleur": "Couleur"}},
+ "skip": ["nokey-0002"], "skip_rules": [{"non_sellable": true}, {"handle_pattern": "^echantillon-"}],
+ "fields": {"2228": {"title": "Grille-pain vintage crème"}},
+ "generated_keys": [{"source": "main", "row": 7, "title": "Toaster sans référence", "key": "nokey-0001"}]}
+```
+
+- `skus`: SKU renames per handle. `option_names`: option renames per handle, `*` for every product (a handle entry wins).
+- `skip`: handles left out. `skip_rules`: a product matching any rule is left out (all conditions of one rule must match): `non_sellable`, `metafield_prefix`, `handle_pattern`.
+- `fields`: product values replaced after the renames, for `title`, `description_html`, `vendor`, `tags`, `product_category`, `status`.
+- `generated_keys`: written by `extract.py` only, never by hand: the keys given to rows without reference, matched again by source row and title.
+
+After a change that skips products, run `state.py sync <dir>`.
+
+## state.json
+
+```json
+{
+  "version": 1, "source": "files", "phase": 1, "client": "acme", "mcp_url": "https://...",
+  "started_at": "2026-10-27T10:00:00Z",
+  "decisions": {"data_language": "fr", "status_mode": "draft", "codes": {"prefix": "2", "next_start": 6, "sku_pattern": "{handle}-{index}"}},
+  "decision_meta": {"status_mode": {"origin": "developer", "reason": null, "phase": 1, "at": "2026-10-27T10:05:00Z"}},
+  "shared": {"metafield_definition:import.key": {"iri": "/api/metafield_definitions/019f84f8-...", "status": "created",
+                                                 "module": "core", "spec": {"type": "single_line_text_field", "name": "Clé d'import"}}},
+  "products": {"2230": {
+    "status": "pending", "iri": null, "pilot": false, "error": null,
+    "items": [{"kind": "variant", "iri": "/api/products/019f.../variants/019f...", "status": "created", "module": "core", "ref": "1005"}]
+  }}
+}
+```
+
+- `phase`: the migration phase the decisions were taken in (1 for the first run).
+- `decision_meta.<key>`: `origin` (`developer`, `agent` or `client`), `reason` (in the data language), `phase` and `at`, written by `state.py decide`.
+- Product status: `pending`, `created`, `failed`, `deleted`, `skipped` (handle no longer in `products.json`; back to `pending` if it reappears).
+- `verify`: `ok`, `fixed` or `mismatch` when the description was checked after creation (`verify.py`).
+- `decisions.status_mode`: `draft`, `active` or `source`. `decisions.status_map`: `{"<source status in lowercase>": "<Flowkiwi status code>"}`, applied before the default mapping when `status_mode` is `source`.
+- `decisions.data_language`: language of every name or label generated by the migration (ISO code, e.g. `fr`). `decisions.marker_labels` (`{"name", "description"}`) overrides the marker definition labels for a language `plan_shared.py` does not know.
+- `decisions.cleaning`: the cleaning rules validated in Phase 1. `decisions.description_generation`: `{"approved": true}` once generated descriptions are approved. `decisions.adopt`: `{"<handle>": "<tenant product IRI>"}` for products mapped to an existing tenant product.
+- Shared entry `spec`: what was asked when the element was created (type, name...), copied from the `plan_shared.py` entry, to detect a later drift.
+- Item status: `created` (made by this migration, undoable), `reused` (existed before, never deleted), `deleted`.
+- Item `ref`: names the item in the product, so a later phase can match it: the SKU of a `variant`, the title of a `product_option`, `<option title>:<value>` of an `option_value`, `namespace.key` of a `metafield`.
+- Item `shared`: the shared key the item depends on (`metafield_definition:import.key` for the marker). Used by the undo scope `shared:<key>`.
+- Shared keys are `<kind>:<name>`. Item kinds, in undo order: `sale_offer`, `purchase_offer`, `metafield`, `variant`, `option_value`, `product_option`, `*_link`, `product`, `collection`, `attribute_option`, `attribute_definition`, `category`, `supplier`, `tax`, `metafield_definition`, `channel`, `country`.
+
+## Worker result line
+
+```json
+{"handle": "2230", "status": "created", "iri": "/api/products/019f84f8-...", "error": null, "verify": "ok",
+ "items": [{"kind": "product", "iri": "/api/products/019f84f8-...", "status": "created", "module": "core"},
+           {"kind": "variant", "iri": "/api/products/019f84f8-.../variants/019f84f9-...", "status": "created", "module": "core", "ref": "1005"}]}
+```
+
+`status` is `created` or `failed`. On failure, still list the items created before the failure so they can be reused or undone. Optional `verify`: `ok`, `fixed` or `mismatch`.
+
+`state.py result` rejects a line that does not follow these rules: missing keys, unknown statuses, an IRI that is not `/api/<resource>/<uuid>` (a `#<relation>` suffix only for `*_link` items), an empty `ref`, a `shared` that is not a shared key.
+
+## Commands
+
+```
+$S = python3 $SKILL/scripts
+$S/intake.py add <dir> <path>... [--replace]                         # copy client files into sources/
+$S/inventory.py <dir> [--samples 5]                                  # writes inventory.json
+$S/clean.py table                                                    # the cleaning rules
+$S/extract.py <dir> products                                         # writes products.json (and new generated keys in fixes.json)
+$S/catalog.py --validate <dir>/products.json                         # refresh and print the warnings
+$S/catalog.py --check <dir>/products.json [--state <dir>/state.json] # exit 1 on blocking warnings
+$S/codes.py preview <dir>/products.json --prefix 2 --start 1 [--sku-pattern "{handle}-{index}"] [--previous <old products.json>]
+$S/codes.py fill <dir>/products.json --prefix 2 --start 1 [--sku-pattern "{handle}-{index}"] [--previous <old products.json>]
+$S/codes.py fix <dir>/products.json <dir>/fixes.json                 # one-off check: extract.py applies fixes itself
+$S/state.py init <dir> --client <slug> --mcp-url <url>
+$S/state.py sync <dir>                                               # new or skipped handles from products.json
+$S/state.py decide <dir> --key <name> --value-json '<json>' | --value-file <file.json> --origin developer|agent|client [--reason "<text>"]
+$S/state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module> [--spec-json '<json>']
+$S/state.py shared <dir> --file <dir>/tmp/shared/shared.json         # [{"key", "iri", "status", "module", "spec"}, ...]
+$S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] [--retry-failed] [--module <name>]
+$S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
+$S/state.py merge <dir>
+$S/state.py undo-plan <dir> --scope all|pilot|module:<name>|shared:<key>
+$S/state.py deleted <dir> --iris-file <dir>/undo/deleted-<timestamp>.json
+$S/state.py reset-deleted <dir>                                      # deleted products back to pending
+$S/state.py summary <dir>
+$S/dryrun.py <dir>                                                   # exit 1 on blocking warnings or missing decisions
+$S/plan_shared.py <dir> [--ready]
+$S/payload.py <dir> <handle> [--step product|options|variants|metafields|taxonomy|all] [--dry-run]
+$S/verify.py sample <dir> --rate 0.1 --output <dir>/verify-sample.json
+$S/verify.py <dir> <handle> --field description|title --readback-file <dir>/tmp/worker-1/readback.txt   # exit 0 match, 1 mismatch
+```
+
+`payload.py` prints the exact MCP bodies of one product (status from `status_mode`, tags joined with `,`, the `import.key` marker, options with positions, variants with their option value names). Non-ASCII letters stay literal; invisible or special whitespace characters are printed as `\uXXXX` escapes. A missing decision or shared IRI is an error (`--dry-run`: a `<key IRI>` placeholder).
+
+`plan_shared.py` prints the shared elements to create, in order, with `key`, `module`, `operation`, `lookup`, `path`, `body`, `spec` and `depends_on` (keys not recorded yet, shown as `<key IRI>` placeholders in the body). Keys recorded `created` or `reused` are skipped; `deleted` ones are planned again. `--ready`: only the entries with no pending dependency. `state.py shared --file` checks every entry before recording any.
+
+`verify.py` compares a read-back value with `products.json` after normalizing line endings, Unicode composition and outer whitespace, and prints both lengths, both SHA-256 and the first differing position with its context. `sample` lists ~`rate` of the handles (deterministic hash), every handle whose description holds special whitespace or non-ASCII punctuation, and the pilot products.
+
+`worklists` first merges any unmerged results, then writes fresh worklists. Products sharing the same title always go to the same worker, so the orphan rule can never adopt another worker's product.
+- `--handles a,b,c`: explicit selection (combine with `--pilot`). An unknown handle, or one that is not `pending` (`failed` too with `--retry-failed`), is an error and the previous worklists are kept.
+- `--pilot` without `--handles`: a representative selection of up to `--limit` products (default 5) covering, when present: several variants, a single variant, a category, no category, metafields, a generated description, each source status, the longest description. The rest is filled in order. The `pilot` flag of products not `created` is cleared first, so only the new selection is flagged.
+- `--module <name>`: `created` products with no live item of that module (for later concepts).
+
+## Resume rules
+
+- Resuming = invoking the skill again: `merge`, then `summary`, then continue.
+- A product with no result line (worker died mid-product) stays `pending`. The next worker run finds it by marker (or adopts the orphan) before creating anything, per `references/create.md`.
+- A `failed` product is only retried with `--retry-failed`. Its earlier items are in the state: the worker reuses them.

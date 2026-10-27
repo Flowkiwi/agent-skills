@@ -37,26 +37,55 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 ## Start or resume
 
-Check the MCP first (`list_locales`, `list_channels`, `list_countries`), ask the client slug, then start Phase 1 or, when `migrations/<client-slug>/state.json` exists, offer to continue, retry failed, undo or run a later phase.
+`$S` below is `python3 $SKILL/scripts` and `<dir>` the workspace folder. Work inside the workspace.
+
+1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the Flowkiwi tools are missing at first, the MCP may still be connecting: wait a few seconds (`sleep 5`) and search the tools again once before concluding. Still missing or not connected: stop and say so.
+2. Ask the client slug. Workspace: `migrations/<client-slug>/` (layout in `references/state.md`).
+3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: not supported by this version yet, say so and offer the other choices). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
 
 ## Phase 1 - Intake
 
-Work inside the workspace. `$S` = `python3 $SKILL/scripts`.
+~5 min. Read `references/sources.md`.
 
-Copy the client files into the workspace without touching the originals, with `$S/intake.py add <dir> <path>...` (exit codes and conversion of old `.xls` files in `references/sources.md`), then inventory their sheets and columns.
+1. **Files**: ask for the client files (dropped in the conversation, or their paths). `$S/intake.py add <dir> <path>...` copies them into `sources/` (exit codes and conversion of old `.xls` files in `references/sources.md`). A new version of a file later: add it again with `--replace`.
+2. **Inventory**: `$S/inventory.py <dir>`, then summarize the defects to the developer, sheet by sheet (`references/sources.md` `## Inventory`). Never open a source file: `inventory.json` answers the questions (`--samples 10` when more values are needed).
+3. **Cleaning**: show `$S/clean.py table` once and ask "Keep these rules for this client?". Changes go to `<dir>/mappings/cleaning.json` (format in `references/state.md`). The answer is recorded once the state exists (Phase 2 step 5).
 
 ## Phase 2 - Concepts
 
-Take the concepts one by one in order, proposing a mapping from the inventory for each and recording every decision with its origin.
+Take the concepts in menu order. Announce the effort before each one and only load its reference then.
+
+| Concept                        | Brings                                         | Effort     | Reference                |
+| ------------------------------ | ---------------------------------------------- | ---------- | ------------------------ |
+| products and variants (always) | products, options, variants, SKUs and barcodes | ~30-60 min | `references/products.md` |
+
+Per concept:
+
+1. **Read** its reference.
+2. **Propose** the mapping from `inventory.json`: for each field, the columns in priority order, the conversions and the defaults. Detect the data language from the samples (titles, descriptions). Ask the questions of the reference `## Questions` in **one grouped round**, each with its default proposal: the developer only answers what they want to change.
+3. **Write** `<dir>/mappings/<concept>.json` (format in `references/mapping.md`). A choice made without the developer's answer carries `"origin": "agent"` and its `reason`, in the data language.
+4. **Extract**: `$S/extract.py <dir> <concept>`. It prints the counts, the cleaning counts and the warnings grouped by code. Exit 1 is a mapping error naming the field: fix the mapping and run it again.
+5. **State**, after the first extract only: `$S/state.py init <dir> --client <slug> --mcp-url <url>`. Then the **data language**: compare the detected language with the tenant default locale and ask the developer to confirm (they differ: ask which one wins), then `$S/state.py decide <dir> --key data_language --value-json '"fr"' --origin developer`. From now on, every name you propose (option labels, marker labels, later categories and attributes) is written in that language, and the dry-run lists them for review. For a language `plan_shared.py` does not know (en, fr, de, es, it), also record `marker_labels` (`{"name": "...", "description": "..."}`) in that language. Then the **cleaning** answer of Phase 1: `$S/state.py decide <dir> --key cleaning --value-file <dir>/mappings/cleaning.json --origin developer` (`--value-json '{}'` when the rules are kept as they are). Later, after any extract that adds or drops products: `$S/state.py sync <dir>`.
+6. **Warnings**: settle them as the reference `## Warnings` says, by changing the mapping or adding a `fixes.json` entry (format in `references/state.md`), then extract again. `extract.py` always rebuilds `products.json` from the source files, replaying `fixes.json` and keeping the codes generated earlier: never edit `products.json`.
+7. Run the remaining steps of the reference (products: status, descriptions, codes, tenant collisions).
 
 ## Phase 3 - Create
 
-Show a dry-run summary, wait for the developer's approval, then create the shared elements and the products.
+Read `references/create.md` and follow it: blocking check, dry-run summary and explicit approval, shared elements, pilot, full run, final report.
 
 ## Running workers
 
-Products are created by parallel subagents when the agent can spawn them, otherwise sequentially in the main session, with the same files and the same procedure.
+Two modes, same files and same procedure:
+
+- **Parallel** (the agent can spawn subagents, e.g. the Agent tool in Claude Code): one subagent per `worklists/worker-<n>.json`, all launched at once so they run in parallel. 4 workers by default, at most 6: more workers hit the MCP rate limit.
+- **Sequential** (no subagents, or the developer prefers it): always `$S/state.py worklists <dir> --workers 1`, then **you** are the worker: follow the worker prompt yourself for `worker-1.json`, appending one result line per product. Run `$S/state.py merge <dir>` every 20 products so an interruption loses little. Keep tool outputs short (request only the fields you need). For large catalogs (several hundred products), suggest continuing in a fresh session from time to time: resuming is safe (merge, summary, continue).
+
+In both modes:
+
+- Build each prompt from the worker template in `references/create.md` (`## Worker prompt template`): absolute paths for `{{SKILL}}`, `{{DIR}}`, `{{WORKLIST_PATH}}`, `{{PRODUCTS_PATH}}`, `{{STATE_PATH}}`, `{{RESULT_PATH}}` (`results/worker-<n>.jsonl`) and `{{WORK_DIR}}` (`<dir>/tmp/worker-<n>/`, one per worker), the full `started_at` timestamp of `state.json` for `{{MIGRATION_STARTED_AT}}`, and for `{{PER_PRODUCT}}` the fields table of `references/products.md` `## Map` followed by the `## Per product` section of `references/create.md`, with `$SKILL` replaced by the skill path. Workers never read the references: anything they need must be in the prompt.
+- Workers (or you, in sequential mode) append one line per product to `results/worker-<n>.jsonl` with `state.py result`, every item with its `ref` (SKU, option title, `<option>:<value>` or `namespace.key`), and return a 3-line summary only. Do not ask them for details: read the state instead.
+- After all workers return (or after each sequential batch), run `$S/state.py merge <dir>` before anything else. It rejects lines whose handle is not in that worker's worklist, or claimed by several workers with different IRIs, and writes them to `results/rejected-<stamp>.jsonl`: show them to the developer.
 
 ## Undo
 
-Only items created by this migration can be removed, and only after the developer confirmed the scope.
+Read `references/undo.md`. Only items recorded `created` by this migration are removed, after the developer confirmed the scope (`pilot`, `module:<name>`, `shared:<key>` or `all`).

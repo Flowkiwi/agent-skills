@@ -1,4 +1,4 @@
-"""Poor descriptions and their validated generation (see references/mapping.md, "generate").
+"""Poor descriptions and their validated generation (see references/products.md, "Descriptions").
 
 A generated description is created content: it states only the intro placeholders ({title}, {vendor}) and
 the feature values read from the source files. It replaces a poor description only after the explicit
