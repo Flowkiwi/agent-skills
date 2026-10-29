@@ -112,7 +112,8 @@ def dedupe(values):
 def list_source(spec: dict) -> Optional[str]:
     if spec.get("pick") == "all":
         return "pick: all"
-    if any(isinstance(step, dict) and "split" in step for step in spec.get("transform", [])):
+    steps = list(spec.get("transform", [])) + [s for e in spec.get("from", []) for s in mapping.from_steps(e)]
+    if any(isinstance(step, dict) and "split" in step for step in steps):
         return "a split transform"
     if isinstance(spec.get("value"), list):
         return "a list value"

@@ -8,7 +8,11 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import clean  # noqa: E402
+import client_review  # noqa: E402
+import columns  # noqa: E402
+import extract  # noqa: E402
 import mapping  # noqa: E402
+import taxonomy  # noqa: E402
 from demo_files import write_demo_csv, write_demo_xlsx  # noqa: E402
 from sources import Table  # noqa: E402
 
@@ -311,6 +315,123 @@ class ValidateTest(unittest.TestCase):
         with open(path, "w", encoding="utf-8") as f:
             json.dump(data, f, ensure_ascii=False)
         self.assertEqual(mapping.load_mapping(path)["key"]["reason"], "Référence")
+
+
+class SuffixTest(unittest.TestCase):
+    def setUp(self):
+        self.sources, self.rows, self.cleaner = csv_workspace(
+            self, "p;q;l;n\n1400;1400,0;A / B;\n;;;x\n1,5;1.6;;\n")
+        self.warnings = []
+
+    def ev(self, spec, index=0):
+        return mapping.evaluate(spec, self.rows[index], self.sources, self.warnings, "test")
+
+    def test_suffix_on_a_scalar_after_the_transform(self):
+        self.assertIn("suffix", mapping.SPEC_KEYS)
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": " W"}), "1400 W")
+        self.assertEqual(self.ev({"from": ["main:p"], "transform": ["decimal"], "suffix": " kg"}, 2), "1.5 kg")
+
+    def test_suffix_on_each_element_of_a_list(self):
+        self.assertEqual(self.ev({"from": ["main:l"], "transform": [{"split": "/"}], "suffix": " cm"}),
+                         ["A cm", "B cm"])
+
+    def test_default_is_not_suffixed(self):
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": " W", "default": "inconnue"}, 1), "inconnue")
+        self.assertIsNone(self.ev({"from": ["main:p"], "suffix": " W"}, 1))
+
+    def test_suffix_is_cleaned(self):
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": "\u00a0W\u2026"}), "1400 W...")
+        self.assertEqual(self.cleaner.counts, {"nbsp": 1, "ellipsis": 1})
+
+    def test_conflicts_compare_values_before_the_suffix(self):
+        spec = {"from": ["main:p", "main:q"], "transform": ["decimal"], "suffix": " W"}
+        self.assertEqual(self.ev(spec), "1400 W")
+        self.assertEqual(self.warnings, [])
+        self.assertEqual(self.ev(spec, 2), "1.5 W")
+        self.assertEqual([w["code"] for w in self.warnings], ["conflict"])
+
+    def test_suffix_must_be_a_string(self):
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec({"from": ["main:p"], "suffix": 1}, ["main"], "x")
+
+    def test_attribute_option_source_is_the_cell_before_the_suffix(self):
+        spec = {"from": ["main:p"], "suffix": " W"}
+        self.assertEqual(taxonomy.attribute_values(spec, "h", self.rows[:1], "attributes.puissance", self.sources,
+                                                   [], self.cleaner), [("1400 W", "1400")])
+
+
+class ColumnTransformTest(unittest.TestCase):
+    HTML_AND_TEXT = {"from": ["main:html", {"column": "main:texte", "transform": ["text_to_html"]}],
+                     "pick": "join", "sep": ""}
+
+    def setUp(self):
+        self.sources, self.rows, self.cleaner = csv_workspace(
+            self, 'html\ttexte\tn\n<p>Intro</p>\t"Puissance <1400 W> & plus\n\nGarantie 2 ans"\tabc\n'
+                  '\tSans intro\t12\n')
+        self.warnings = []
+
+    def ev(self, spec, index=0):
+        return mapping.evaluate(spec, self.rows[index], self.sources, self.warnings, "test")
+
+    def test_text_to_html_joined_after_html(self):
+        self.assertEqual(self.ev(self.HTML_AND_TEXT),
+                         "<p>Intro</p><p>Puissance &lt;1400 W&gt; &amp; plus</p><p>Garantie 2 ans</p>")
+        self.assertEqual(self.ev(self.HTML_AND_TEXT, 1), "<p>Sans intro</p>")
+        self.assertEqual(self.warnings, [])
+
+    def test_column_steps_run_before_the_spec_steps(self):
+        spec = {"from": [{"column": "main:n", "transform": ["integer"]}], "transform": [{"scale_above": [10, 4]}]}
+        self.assertEqual(self.ev(spec, 1), "3")
+        self.assertIsNone(self.ev(spec, 0))
+        self.assertIn("not_a_number", [w["code"] for w in self.warnings])
+
+    def test_an_empty_column_result_gives_way_to_the_next_column(self):
+        spec = {"from": [{"column": "main:n", "transform": ["integer"]}, "main:texte"]}
+        self.assertEqual(self.ev(spec), "Puissance <1400 W> & plus\n\nGarantie 2 ans")
+
+    def test_validation(self):
+        ok = {"from": [{"column": "main:a", "transform": ["text_to_html"]}, {"column": "main:b"}]}
+        mapping.check_spec(ok, ["main"], "x")
+        bad = [{"column": "main:a", "transforms": []}, {"transform": ["text_to_html"]}, {"column": "a"},
+               {"column": "nowhere:a"}, {"column": "main:a", "transform": ["nope"]},
+               {"column": "main:a", "transform": "text_to_html"}, 3]
+        for entry in bad:
+            with self.assertRaises(mapping.MappingError):
+                mapping.check_spec({"from": [entry]}, ["main"], "x")
+        with self.assertRaises(mapping.MappingError) as error:
+            mapping.check_spec({"from": [bad[0]]}, ["main"], "product.title")
+        self.assertIn("'transforms'", str(error.exception))
+        self.assertIn("product.title", str(error.exception))
+
+    def test_refs_and_loading(self):
+        self.assertEqual(mapping.from_ref({"column": "main:a", "transform": []}), "main:a")
+        self.assertEqual(mapping.from_ref("main:a"), "main:a")
+        self.assertEqual(mapping.mapping_refs({"description_html": self.HTML_AND_TEXT}), ["main:html", "main:texte"])
+        directory = make_workspace(self)
+        bad = dict(MAIN_AND_PRICES, product={"title": {"from": [{"column": "main:nope"}]}})
+        with self.assertRaises(mapping.MappingError):
+            mapping.load_sources(directory, bad, clean.Cleaner())
+
+    def test_split_in_a_column_step_is_a_list(self):
+        with self.assertRaises(mapping.MappingError):
+            extract.check_single({"from": [{"column": "main:a", "transform": [{"split": "/"}]}]}, "product.title")
+
+    def test_columns_referenced_reads_the_object_form(self):
+        directory = make_workspace(self)
+        m = dict(MAIN_AND_PRICES, product={"title": {"from": [{"column": "main:accroche",
+                                                                "transform": ["text_to_html"]}]}})
+        loaded = mapping.load_sources(directory, m, clean.Cleaner())
+        self.assertEqual(columns.referenced(m, loaded),
+                         {mapping.resolve(ref, loaded) for ref in ("main:sku_marchand", "main:accroche", "prices:SKU")})
+
+    def test_client_review_labels_the_object_form(self):
+        inventory = {"files": [{"file": "n.csv", "sheets": [{"sheet": "csv", "columns": [
+            {"letter": "A", "code": "html", "label": "Descriptif"},
+            {"letter": "B", "code": "texte", "label": "Fiche"}]}]}]}
+        choice = {"concept": "products", "reason": "Fiche ajoutée au descriptif.", "spec": self.HTML_AND_TEXT}
+        sources = {"main": {"file": "n.csv"}}
+        self.assertEqual(client_review.choice_text(choice, sources, inventory, {"column": "colonne"}),
+                         'Fiche ajoutée au descriptif. (colonne "Descriptif", "Fiche")')
 
 
 if __name__ == "__main__":

@@ -21,8 +21,9 @@ ARGUMENT_TRANSFORMS = ("boolean", "split", "scale_above", "regex")
 PICKS = ("first", "all", "join")
 CONFLICTS = ("warn", "ignore")
 DOC_KEYS = frozenset(("origin", "reason", "question"))
-SPEC_KEYS = frozenset(("from", "value", "pick", "sep", "map", "map_ignore_case", "transform", "default",
+SPEC_KEYS = frozenset(("from", "value", "pick", "sep", "map", "map_ignore_case", "transform", "suffix", "default",
                        "conflicts")) | DOC_KEYS
+FROM_KEYS = frozenset(("column", "transform"))
 # keys a concept accepts on top of SPEC_KEYS; their content is checked by the concept extractor
 CONCEPT_SPEC_KEYS = {"products": frozenset(("generate",))}
 STAGE = "extract"
@@ -51,6 +52,15 @@ def split_ref(ref: Any) -> Tuple[str, str]:
     if not source_id or not column.strip():
         raise MappingError("column reference %r must be '<source id>:<column>'" % (ref,))
     return source_id, column
+
+
+def from_ref(entry: Any) -> Any:
+    """The column reference of a `from` entry: a string, or the column of {"column", "transform"}."""
+    return entry.get("column") if isinstance(entry, dict) else entry
+
+
+def from_steps(entry: Any) -> list:
+    return entry.get("transform", []) if isinstance(entry, dict) else []
 
 
 # --- validation ---------------------------------------------------------------------------------
@@ -103,6 +113,25 @@ def check_step(step: Any, where: str) -> None:
         raise MappingError("%s: bad argument %r for transform '%s' (expected %s)" % (where, arg, name, expected))
 
 
+def check_steps(steps: Any, where: str) -> None:
+    if not isinstance(steps, list):
+        raise MappingError("%s: transform must be a list of steps" % where)
+    for step in steps:
+        check_step(step, where)
+
+
+def check_from_entry(entry: Any, source_ids, where: str) -> None:
+    if isinstance(entry, dict):
+        unknown = sorted(set(entry) - FROM_KEYS)
+        if unknown:
+            raise MappingError("%s: unknown key '%s' in a 'from' entry (valid: column, transform)" % (
+                where, unknown[0]))
+        if "column" not in entry:
+            raise MappingError("%s: a 'from' entry object needs 'column'" % where)
+        check_steps(entry.get("transform", []), where)
+    check_ref(from_ref(entry), source_ids, where)
+
+
 def check_spec(spec: dict, source_ids, where: str, extra_keys=()) -> None:
     if "from" in spec and "value" in spec:
         raise MappingError("%s: a field spec has 'from' or 'value', not both" % where)
@@ -117,21 +146,19 @@ def check_spec(spec: dict, source_ids, where: str, extra_keys=()) -> None:
         refs = spec["from"]
         if not isinstance(refs, list) or not refs:
             raise MappingError("%s: 'from' must be a non-empty list of column references" % where)
-        for ref in refs:
-            check_ref(ref, source_ids, where)
+        for entry in refs:
+            check_from_entry(entry, source_ids, where)
     if spec.get("pick", "first") not in PICKS:
         raise MappingError("%s: pick must be one of %s" % (where, ", ".join(PICKS)))
     if spec.get("conflicts", "warn") not in CONFLICTS:
         raise MappingError("%s: conflicts must be one of %s" % (where, ", ".join(CONFLICTS)))
     if "sep" in spec and not isinstance(spec["sep"], str):
         raise MappingError("%s: sep must be a string" % where)
+    if "suffix" in spec and not isinstance(spec["suffix"], str):
+        raise MappingError("%s: suffix must be a string" % where)
     if "map" in spec and not isinstance(spec["map"], dict):
         raise MappingError("%s: map must be an object" % where)
-    steps = spec.get("transform", [])
-    if not isinstance(steps, list):
-        raise MappingError("%s: transform must be a list of steps" % where)
-    for step in steps:
-        check_step(step, where)
+    check_steps(spec.get("transform", []), where)
 
 
 def walk(node: Any, source_ids, where: str, extra_keys=()) -> None:
@@ -293,7 +320,7 @@ def resolve(ref: str, sources: Dict[str, LoadedSource]) -> Tuple[str, int]:
 def mapping_refs(node: Any) -> List[str]:
     if isinstance(node, dict):
         if is_spec(node):
-            return list(node.get("from", []))
+            return [from_ref(entry) for entry in node.get("from", [])]
         return [ref for value in node.values() for ref in mapping_refs(value)]
     if isinstance(node, list):
         return [ref for value in node for ref in mapping_refs(value)]
@@ -514,13 +541,28 @@ def map_value(value, spec):
     return table[value] if value in table else value
 
 
-def convert(value, spec, warnings, field, row, handle, cleaner=None):
-    value = map_value(value, spec)
-    for step in spec.get("transform", []):
+def run_steps(value, steps, warnings, field, row, handle, cleaner=None):
+    for step in steps:
         if is_empty(value):
             break
         value = apply_transform(value, step, warnings, field, row, handle, cleaner)
     return value
+
+
+def convert(value, spec, warnings, field, row, handle, cleaner=None):
+    return run_steps(map_value(value, spec), spec.get("transform", []), warnings, field, row, handle, cleaner)
+
+
+def add_suffix(value, suffix: str, cleaner: clean.Cleaner):
+    if isinstance(value, list):
+        return [add_suffix(item, suffix, cleaner) for item in value]
+    if is_empty(value) or isinstance(value, (bool, dict)):
+        return value
+    return cleaner.final("%s%s" % (value, suffix))
+
+
+def flat(values) -> List[str]:
+    return [item for value in values for item in (value if isinstance(value, list) else [value])]
 
 
 def same_value(a, b) -> bool:
@@ -534,19 +576,21 @@ def evaluate(spec: dict, row: Row, sources: Dict[str, LoadedSource], warnings: L
     if "value" in spec:
         return spec["value"]
     cleaner = next(iter(sources.values())).cleaner
-    candidates = []  # type: List[Tuple[str, str]]
-    for ref in spec["from"]:
+    candidates = []  # type: List[Tuple[str, Any]]
+    for entry in spec["from"]:
+        ref = from_ref(entry)
         source_id, col = resolve(ref, sources)
-        value = row.value(source_id, col)
-        if value is not None:
+        value = run_steps(row.value(source_id, col), from_steps(entry), warnings, field, row.row, handle, cleaner)
+        if not is_empty(value):
             candidates.append((ref, value))
     pick = spec.get("pick", "first")
     if pick == "all":
-        result = convert(dedupe([value for _, value in candidates]), spec, warnings, field, row.row, handle, cleaner)
+        result = convert(dedupe(flat(value for _, value in candidates)), spec, warnings, field, row.row, handle,
+                         cleaner)
         if isinstance(result, list):
             result = dedupe(result)
     elif pick == "join":
-        joined = spec.get("sep", "\n").join(value for _, value in candidates) if candidates else None
+        joined = spec.get("sep", "\n").join(flat(value for _, value in candidates)) if candidates else None
         result = convert(joined, spec, warnings, field, row.row, handle, cleaner)
     else:
         result = convert(candidates[0][1], spec, warnings, field, row.row, handle, cleaner) if candidates else None
@@ -557,4 +601,6 @@ def evaluate(spec: dict, row: Row, sources: Dict[str, LoadedSource], warnings: L
                 if not same_value(convert(value, spec, [], field, row.row, handle, quiet), result):
                     warn(warnings, row.row, handle, "conflict", field, "%s = %r (kept) but %s = %r" % (
                         first_ref, first_value, ref, value))
-    return spec.get("default") if is_empty(result) else result
+    if is_empty(result):
+        return spec.get("default")
+    return add_suffix(result, spec["suffix"], cleaner) if spec.get("suffix") else result

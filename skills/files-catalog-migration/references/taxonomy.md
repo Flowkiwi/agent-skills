@@ -19,7 +19,9 @@ The mapping has no `sources`: its columns are those of `mappings/products.json` 
                         "PEM > Bouilloire": "Petit électroménager > Bouilloire"},
                 "rename": {}, "assign": {}, "status": "/api/statuses/ACTIVE"},
  "attributes": [{"name": "Matière", "type": "list",
-                 "value": {"from": ["main:matiere"], "map": {"inox": "Acier inoxydable"}, "map_ignore_case": true}}]}
+                 "value": {"from": ["main:matiere"], "map": {"inox": "Acier inoxydable"}, "map_ignore_case": true}},
+                {"name": "Puissance", "type": "list",
+                 "value": {"from": ["main:puissance"], "transform": ["integer"], "suffix": " W"}}]}
 ```
 
 | Key           | Meaning                                                                                                     | Default                |
@@ -45,18 +47,18 @@ A product takes the category of its first row that gives one; a later row of the
 
 Each entry of `attributes` turns one characteristic column into an attribute definition attached to the categories of the products that have a value.
 
-| Key        | Meaning                                                                                                  | Default                 |
-| ---------- | -------------------------------------------------------------------------------------------------------- | ----------------------- |
-| `code`     | shared key of the definition, `^[a-z0-9]+([-_][a-z0-9]+)*$`, 2-64 characters; never renamed once created | from `name` (`matiere`) |
-| `name`     | attribute name in the data language                                                                      | required                |
-| `type`     | `list` (values are options) or `string` (free text, up to 255 characters)                                | required                |
-| `multiple` | `true`: a product keeps every value of its rows; `false`: one value                                      | `false`                 |
-| `value`    | field spec of the column (`map` for spelling variants, `transform` such as `boolean`)                    | required                |
-| `origin`   | `developer`, `agent` or `client`, with its `reason` in the data language                                 | -                       |
+| Key        | Meaning                                                                                                   | Default                 |
+| ---------- | --------------------------------------------------------------------------------------------------------- | ----------------------- |
+| `code`     | shared key of the definition, `^[a-z0-9]+([-_][a-z0-9]+)*$`, 2-64 characters; never renamed once created  | from `name` (`matiere`) |
+| `name`     | attribute name in the data language                                                                       | required                |
+| `type`     | `list` (values are options) or `string` (free text, up to 255 characters)                                 | required                |
+| `multiple` | `true`: a product keeps every value of its rows; `false`: one value                                       | `false`                 |
+| `value`    | field spec of the column (`map` for spelling variants, `transform` such as `boolean`, `suffix` for units) | required                |
+| `origin`   | `developer`, `agent` or `client`, with its `reason` in the data language                                  | -                       |
 
 Once a definition is created, pin its `code` in the mapping entry (`"code": "matiere"`): a later change of `name` then stays an update of the definition, while a code derived from a new name is another key (the created definition removed, a destructive change in a later phase).
 
-A product's values are the distinct non-empty results of `value` over its rows, in row order. An empty cell gives no value (never `Non`). Options of a `list` definition are its distinct values in order of first appearance, each with the cleaned cell it comes from (`source`, shown as `Acier inoxydable (from Inox)` in the preview). The definition is attached to the lowest common ancestor of the categories of its products (or to each root when they share none). Products without category lose their values (`uncategorized_values`).
+A product's values are the distinct non-empty results of `value` over its rows, in row order. An empty cell gives no value (never `Non`). Options of a `list` definition are its distinct values in order of first appearance, each with the cleaned cell it comes from (`source`, shown as `Acier inoxydable (from Inox)` in the preview). The definition is attached to the lowest common ancestor of the categories of its products (or to each root when they share none). Products without category lose their values (`uncategorized_values`). A number column gets its unit with `suffix` (the `Puissance` entry above): option `1400 W`, source `1400`.
 
 1. **Candidates**: the rows of `$S/columns.py propose <dir>` with role `attribute` (its type `list` or `string`), and the `value_variants` flags of those columns in `inventory.json` (`Inox`, `inox`).
 2. **One table**: show every candidate in one table and ask once for the whole table, not column by column:

@@ -47,26 +47,42 @@ A spec holds exactly one of `from` or `value`; the other keys of the table are o
 
 | Key               | Meaning                                                                                                  | Default |
 |-------------------|----------------------------------------------------------------------------------------------------------|---------|
-| `from`            | column references, in priority order                                                                     | -       |
+| `from`            | column references, in priority order; an entry may be `{"column": "<ref>", "transform": [...]}`          | -       |
 | `value`           | a constant instead of `from` (string, list or `null`)                                                    | -       |
 | `pick`            | `first`: first non-empty value; `all`: list of the non-empty values, deduplicated; `join`: joined values | `first` |
 | `sep`             | separator of `pick: join`                                                                                | `"\n"`  |
 | `map`             | value replacements, exact match; a `null` target drops the value                                         | none    |
 | `map_ignore_case` | `map` keys and the value compared casefolded                                                             | `false` |
 | `transform`       | conversion steps, applied in order (see below)                                                           | none    |
+| `suffix`          | text appended to every non-empty value after `transform` (a unit: `" W"`), never to `default`            | none    |
 | `default`         | value used when the result is empty                                                                      | `null`  |
 | `conflicts`       | `warn` or `ignore`: with `pick: first`, warn when another column gives a different value                 | `warn`  |
 | `origin`          | who decided this spec: `developer`, `agent` or `client`                                                  | none    |
 | `reason`          | why, in one sentence                                                                                     | none    |
 | `question`        | the open question to ask the client about this field                                                     | none    |
 
-Evaluation order: the cleaned cell values of `from` -> `pick` -> `map` -> each `transform` step -> `default` when the result is empty. A list value (from `pick: all` or `split`) is mapped and transformed element by element; empty elements are dropped.
+Evaluation order: the cleaned cell values of `from` (each through the `transform` of its entry, if any) -> `pick` -> `map` -> each `transform` step -> `suffix` -> `default` when the result is empty. A list value (from `pick: all` or `split`) is mapped, transformed and suffixed element by element; empty elements are dropped. A `value` constant is returned as written: no `map`, `transform` or `suffix`.
 
-A list is only valid on a list field (products: `tags` and `images`). On any other field (`key`, `group.key`, `options[].value`, the other product and variant fields) `pick: all`, a `split` step or a list `value` is rejected when the mapping is checked: use `pick: first` or `pick: join`. A list that still reaches a single-value field during the extraction (a `map` target written as a list) raises the blocking `list_in_single_field` warning instead of keeping its first item silently.
+A list is only valid on a list field (products: `tags` and `images`). On any other field (`key`, `group.key`, `options[].value`, the other product and variant fields) `pick: all`, a `split` step (of the spec or of a `from` entry) or a list `value` is rejected when the mapping is checked: use `pick: first` or `pick: join`. A list that still reaches a single-value field during the extraction (a `map` target written as a list) raises the blocking `list_in_single_field` warning instead of keeping its first item silently.
 
-With `pick: first` and `conflicts: warn`, every other non-empty column of `from` goes through the same `map` and `transform`. A different result adds a `conflict` warning naming each column and its value; the first column wins. Numbers are compared as numbers: `1,8` and `1.8` (or `29,90` and `29.9`) with `decimal` are the same value, no conflict.
+With `pick: first` and `conflicts: warn`, every other non-empty column of `from` goes through the same `map` and `transform`. A different result adds a `conflict` warning naming each column and its value; the first column wins. Values are compared before the `suffix`. Numbers are compared as numbers: `1,8` and `1.8` (or `29,90` and `29.9`) with `decimal` are the same value, no conflict.
 
 `origin`, `reason` and `question` document the decision; they also apply to non-spec objects (the `group` of products). `reason` and `question` are written in the data language (French for a French catalog): they are shown to the client.
+
+### Per-column transforms
+
+A `from` entry is a reference, or an object `{"column": "<ref>", "transform": [<steps>]}` (only these two keys, `transform` optional). Its steps (same steps as `transform`, see below) run on that cell's cleaned value before `pick`; an entry whose result is empty counts as an empty cell. Use it to join columns of different formats, such as an HTML description followed by a plain text sheet turned into HTML:
+
+```json
+"description_html": {"from": ["main:descriptif", {"column": "main:fiche_technique", "transform": ["text_to_html"]}],
+                     "pick": "join", "sep": ""}
+```
+
+`<p>Grille-pain 2 fentes</p>` and `Puissance : 1400 W & thermostat` give `<p>Grille-pain 2 fentes</p><p>Puissance : 1400 W &amp; thermostat</p>`: the text is escaped, the HTML is kept as it is. The spec `transform` then applies to the joined value.
+
+### Suffix
+
+`suffix` writes a unit after the value, once converted: `{"from": ["main:puissance"], "transform": ["decimal"], "suffix": " W"}` gives `1400 W` for `1400`. An empty value stays empty and `default` is never suffixed. On an attribute, every option gets the suffix (`references/taxonomy.md`); its `source` stays the cell (`1400`).
 
 ## Transforms
 
@@ -101,7 +117,7 @@ Join warnings have `field: null` and `handle: null`. Every warning is `{"row", "
 
 Cell values are cleaned with the rules of `scripts/clean.py` (and `mappings/cleaning.json`) when the mapping first reads them, each cell once. Header labels and codes are cleaned for matching but not counted.
 
-Text written after the cells were read is cleaned too, once `fixes.json` is applied: `map` targets, transform results (a `regex` group keeps no edge space), `fields` fixes, option renames and the intro and labels of generated descriptions. This pass applies the same rules, without the `replacements` of `cleaning.json` (they are for the source cells), so it never changes an already cleaned value. The cleaning counts of the output cover the cells the mapping reads and the changes of this pass.
+Text written after the cells were read is cleaned too, once `fixes.json` is applied: `map` targets, transform results (a `regex` group keeps no edge space), suffixed values, `fields` fixes, option renames and the intro and labels of generated descriptions. This pass applies the same rules, without the `replacements` of `cleaning.json` (they are for the source cells), so it never changes an already cleaned value. The cleaning counts of the output cover the cells the mapping reads and the changes of this pass.
 
 ## Worked example: `mappings/products.json`
 

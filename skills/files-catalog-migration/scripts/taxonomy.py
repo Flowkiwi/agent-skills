@@ -211,8 +211,10 @@ def _flat(value) -> List:
 
 def attribute_values(spec, handle, rows, field, sources, warnings, cleaner) -> List[Tuple[str, Optional[str]]]:
     """(value, source) of a product: distinct non-empty values over its rows in row order, with the cleaned
-    cell before map and transform they come from (None for a default)."""
-    bare = {k: v for k, v in spec.items() if k not in ("map", "transform", "default")}
+    cell before map, transform and suffix they come from (None for a default)."""
+    bare = {k: v for k, v in spec.items() if k not in ("map", "transform", "suffix", "default")}
+    if "from" in bare:
+        bare["from"] = [mapping.from_ref(entry) for entry in bare["from"]]
     found = []  # type: List[Tuple[str, Optional[str]]]
     for row in rows:
         values = [cleaner.final(str(v)) for v in _flat(evaluate(spec, row, sources, warnings, field, handle))]
