@@ -71,7 +71,7 @@ List values: the format Flowkiwi expects for a list metafield is checked with on
 
 ## Shared elements
 
-From `$S/plan_shared.py <dir>` (`references/create.md` step 3), after the collections: for each kept definition, look up with `call_operation list_metafield_definitions` (namespace, key, owner type products); else `call_write_operation create_metafield_definition` `{"body": {"namespace": "custom", "key": "poids_net", "name": "Poids net (kg)", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/number_decimal"}}`. Record `metafield_definition:<namespace>.<key>` with module `metafields`. Never touch the `import.key` marker definition here.
+From `$S/plan_shared.py <dir>` (`references/create.md` step 3), after the collections: for each kept definition, look up with `call_operation list_metafield_definitions` with `ownerType` products (every page), then filter namespace and key client side (the operation filters neither); else `call_write_operation create_metafield_definition` `{"body": {"namespace": "custom", "key": "poids_net", "name": "Poids net (kg)", "ownerType": "/api/metafield_owner_types/products", "type": "/api/metafield_definition_types/number_decimal"}}`. Record `metafield_definition:<namespace>.<key>` with module `metafields`. Never touch the `import.key` marker definition here.
 
 ## Per product
 

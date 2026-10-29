@@ -8,6 +8,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
 import dryrun  # noqa: E402
+import plan_shared  # noqa: E402
 from concept_helpers import read_json, run, write_workspace  # noqa: E402
 
 CONCEPTS = ("taxonomy", "metafields", "metaobjects", "prices")
@@ -47,6 +48,22 @@ class DryRunConceptsTest(unittest.TestCase):
         self.assertIn("  taxonomy: 3 categories, 1 attribute definitions, 2 options, 0 products without category", text)
         self.assertIn("  metaobjects: 1 definitions, 3 entries, 6 products referenced", text)
         self.assertRegex(text, r"custom\.poids_net \| Poids net \(kg\) \| proposed number_decimal \| chosen number_decimal \| 5 values")
+
+    def test_mcp_effort_counts_concept_calls(self):
+        products = read_json(os.path.join(self.dir, "products.json"))
+        st = read_json(os.path.join(self.dir, "state.json"))
+        concepts = {c: read_json(os.path.join(self.dir, "concepts", c + ".json")) for c in CONCEPTS}
+        calls = 2 * len(plan_shared.plan(st, products.get("metafield_columns")))
+        for p in products["products"]:
+            handle = p["handle"]
+            calls += 3 + len(p["options"]) + sum(len(o["values"]) for o in p["options"]) + len(p["variants"])
+            calls += len(concepts["metafields"]["values"].get(handle) or {})
+            calls += len(concepts["metaobjects"]["values"].get(handle) or {})
+            calls += sum(len(by_country) for by_country in (concepts["prices"]["offers"].get(handle) or {}).values())
+            calls += 1 if handle in concepts["taxonomy"]["products"] else 0
+        text, _ = dryrun.report(self.dir)
+        self.assertGreater(calls, 60)
+        self.assertIn("MCP effort: ~%d calls, ~%d min (about 8 s per call)" % (calls, -(-calls * 8 // 60)), text)
 
     def test_proposed_names_are_listed(self):
         text, _ = dryrun.report(self.dir)

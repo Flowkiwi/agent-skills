@@ -74,6 +74,13 @@ def _metafield_definition(namespace_key, name, kind):
     return {"namespace": namespace, "key": key, "name": name, "ownerType": OWNER_TYPE, "type": TYPE_PREFIX + kind}
 
 
+def _definition_lookup(namespace_key):
+    """list_metafield_definitions filters neither namespace nor key: they are matched on the listed definitions."""
+    namespace, _, key = namespace_key.partition(".")
+    return (f"list_metafield_definitions with ownerType products (every page), then filter namespace '{namespace}' "
+            f"and key '{key}' client side")
+
+
 def marker_labels(decisions):
     """Marker name and description in the data language; `marker_labels` decision for other languages."""
     custom = decisions.get("marker_labels")
@@ -100,7 +107,7 @@ def plan(state, metafield_columns=None, include_recorded=False):
     marker = _metafield_definition("import.key", name, "single_line_text_field")
     marker["description"] = description
     add(MARKER_KEY, "core", "create_metafield_definition",
-        "list_metafield_definitions: namespace import, key key, owner type products", marker,
+        _definition_lookup("import.key"), marker,
         {"type": "single_line_text_field", "name": name})
 
     taxonomy = decisions.get("taxonomy")
@@ -192,7 +199,7 @@ def plan(state, metafield_columns=None, include_recorded=False):
             if metaobjects.get("reference_validation", False) is True:
                 body["validations"] = _metaobject_validation(state, definition["type"], depends_on)
             add(f"metafield_definition:{namespace_key}", "metaobjects", "create_metafield_definition",
-                f"list_metafield_definitions: namespace.key {namespace_key}, owner type products", body,
+                _definition_lookup(namespace_key), body,
                 {"type": "metaobject_reference", "name": reference["name"]}, depends_on)
             references.add(namespace_key)
 
@@ -210,7 +217,7 @@ def plan(state, metafield_columns=None, include_recorded=False):
             if not definition.get("type"):
                 raise PayloadError(f"metafield definition '{namespace_key}' has no type in decision 'metafields'")
             add(f"metafield_definition:{namespace_key}", "metafields", "create_metafield_definition",
-                f"list_metafield_definitions: namespace.key {namespace_key}, owner type products",
+                _definition_lookup(namespace_key),
                 _metafield_definition(namespace_key, name, definition["type"]),
                 {"type": definition["type"], "name": name})
 

@@ -88,6 +88,28 @@ class DryRunTest(unittest.TestCase):
         text, _ = dryrun.report(self.dir)
         self.assertIn("  products: 5 (1 already created)", text)
 
+    def test_mcp_effort_line(self):
+        self.fill_codes_and_decide_status()
+        state = self.state()
+        state["products"]["2226"]["status"] = "created"
+        self.write_state(state)
+        pending = [p for p in self.products()["products"] if p["handle"] != "2226"]
+        calls = 2 + sum(3 + len(p["options"]) + sum(len(o["values"]) for o in p["options"]) + len(p["variants"])
+                        for p in pending)
+        text, _ = dryrun.report(self.dir)
+        self.assertIn("MCP effort: ~%d calls, ~%d min (about 8 s per call)\n" % (calls, -(-calls * 8 // 60)), text)
+        self.assertLess(text.index("MCP effort:"), text.index("Concepts:"))
+
+    def test_mcp_effort_skips_recorded_shared_elements(self):
+        self.fill_codes_and_decide_status()
+        state = self.state()
+        state_module.record_shared(state, "metafield_definition:import.key",
+                                   "/api/metafield_definitions/0b6c4f9e-1d4a-4a8e-9f1e-3c2b1a0d9e8f", "reused", "core")
+        for product in state["products"].values():
+            product["status"] = "created"
+        self.write_state(state)
+        self.assertIn("MCP effort: ~0 calls, ~0 min (about 8 s per call)", dryrun.report(self.dir)[0])
+
     def test_missing_decisions_exit_1(self):
         self.fill_codes_and_decide_status()
         state = self.state()

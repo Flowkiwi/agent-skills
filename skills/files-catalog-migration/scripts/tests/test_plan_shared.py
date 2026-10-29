@@ -49,7 +49,8 @@ class PlanSharedTest(unittest.TestCase):
         self.assertEqual(entry["key"], "metafield_definition:import.key")
         self.assertEqual((entry["body"]["namespace"], entry["body"]["key"], entry["body"]["name"]),
                          ("import", "key", "Clé d'import"))
-        self.assertEqual(entry["lookup"], "list_metafield_definitions: namespace import, key key, owner type products")
+        self.assertEqual(entry["lookup"], "list_metafield_definitions with ownerType products (every page), then filter "
+                                          "namespace 'import' and key 'key' client side")
         self.assertEqual(entry["spec"], {"type": "single_line_text_field", "name": "Clé d'import"})
         state.record_shared(st, entry["key"], iri("metafield_definitions", "m"), "created", "core", entry["spec"])
         self.assertEqual(plan_shared.plan(st), [])
@@ -73,6 +74,12 @@ class PlanSharedTest(unittest.TestCase):
         self.assertEqual(entries[-1]["body"]["name"], "Ingredients")
         self.assertEqual(entries[-1]["spec"], {"type": "multi_line_text_field", "name": "Ingredients"})
         self.assertEqual(entries[-1]["body"]["type"], "/api/metafield_definition_types/multi_line_text_field")
+
+    def test_metafield_definition_lookup_filters_client_side(self):
+        entry = plan_shared.plan(make_state())[-1]
+        self.assertEqual(entry["key"], "metafield_definition:custom.ingredients")
+        self.assertEqual(entry["lookup"], "list_metafield_definitions with ownerType products (every page), then filter "
+                                          "namespace 'custom' and key 'ingredients' client side")
 
     def test_recorded_keys_are_skipped_and_resolved(self):
         st = make_state()

@@ -127,6 +127,7 @@ class DryRunPhasesTest(unittest.TestCase):
         self.assertIn("    2226: product.title", text)
         self.assertIn("modified in Flowkiwi: 0 (forced: 0)", text)
         self.assertIn("shared changes: 0 destructive (confirmed 0), 0 updates", text)   # 2227 shares brand, category and options
+        self.assertIn("MCP effort: ~4 calls, ~1 min (about 8 s per call)", text)   # per product: a lookup and one write
 
     def test_changes_section_and_removed_flow(self):
         self.remove_rows_of("2227")

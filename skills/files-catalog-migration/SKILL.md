@@ -16,7 +16,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 - An agent with shell access and an MCP client. Subagents are optional (see "Running workers").
 - `python3` 3.8+ (scripts use the standard library only). Check once with `python3 --version`; if the command does not exist (often on Windows), use `python` or `py -3` instead everywhere this skill says `python3`, including in worker prompts.
-- The Flowkiwi MCP server connected to the target tenant (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, OAuth). If its tools are still missing after one retry (see "Start or resume") or ask for authentication, stop and give the developer the setup for their agent from `references/setup.md`.
+- The Flowkiwi MCP server connected to the target tenant (`https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`, OAuth). A cold tenant is slow at first: the OAuth and the first reads can time out, so the start tries each read 3 times (see "Start or resume"). Not connected (tools missing after the retries, or an authentication asked): stop and give the developer the setup for their agent from `references/setup.md`. Connected but slow: wait and retry, the setup is fine.
 
 ## Hard rules
 
@@ -39,7 +39,11 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 
 `$S` below is `python3 $SKILL/scripts` and `<dir>` the workspace folder. Work inside the workspace.
 
-1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. Show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries). If the Flowkiwi tools are missing at first, the MCP may still be connecting: wait a few seconds (`sleep 5`) and search the tools again once before concluding. Still missing or not connected: stop and say so.
+1. Check the MCP: call `list_locales`, `list_channels`, `list_countries`. The tools may be deferred: load them first (ToolSearch in Claude Code, client prefix such as `mcp__flowkiwi__`). Try each read 3 times, with `sleep 5`, then `sleep 15` between attempts: the tenant may be cold (the OAuth and the first calls can time out). Then tell the developer which case it is:
+   - **Not connected**: the tools are still missing, or the MCP asks for authentication (OAuth): stop and give the setup for their agent from `references/setup.md`.
+   - **Connected but slow**: the tools are there but the reads time out or answer 5xx: the setup is fine, the tenant is waking up: wait a minute and try again, before suspecting the setup.
+
+   Once the reads answer, show the tenant (MCP URL from the agent's MCP configuration, or ask the developer for it; default locale, channels, countries).
 2. Ask the client slug. Workspace: `migrations/<client-slug>/` (layout in `references/state.md`).
 3. If `migrations/<client-slug>/state.json` exists: run `$S/state.py merge <dir>` then `$S/state.py summary <dir>`, show it, and offer: **continue** (at the first step not done), **add a concept** (Phase 2 menu, then `references/create.md` `## Concept added after creation` when the products already exist), **retry failed** (`references/create.md`, `--retry-failed`), **undo** (`references/undo.md`), **later phase** (the client answered or sent new files: "Later phases" below). Otherwise start Phase 1 (with files already in `sources/`, go on from the inventory).
 
@@ -80,7 +84,7 @@ Per concept:
 
 ## Phase 3 - Create
 
-Read `references/create.md` and follow it: blocking check, dry-run summary and explicit approval, shared elements, pilot, full run, final report.
+Read `references/create.md` and follow it: blocking check, dry-run summary and explicit approval, shared elements, pilot, full run, final report. Before asking for approval, tell the developer the MCP time from the `MCP effort` line of `dryrun.py` (about 8 s per call, for one worker: parallel workers split the products, not the shared elements).
 
 End every phase with the client review: `$S/client_review.py <dir>` writes `client-review.md`, the questions, choices and missing data to send to the client (`references/review.md`).
 
@@ -97,7 +101,7 @@ Two modes, same files and same procedure:
 
 In both modes:
 
-- Build each prompt from the worker template in `references/create.md` (`## Worker prompt template`): absolute paths for `{{SKILL}}`, `{{DIR}}`, `{{WORKLIST_PATH}}`, `{{PRODUCTS_PATH}}`, `{{STATE_PATH}}`, `{{RESULT_PATH}}` (`results/worker-<n>.jsonl`) and `{{WORK_DIR}}` (`<dir>/tmp/worker-<n>/`, one per worker), the full `started_at` timestamp of `state.json` for `{{MIGRATION_STARTED_AT}}`, and for `{{PER_PRODUCT}}` the fields table of `references/products.md` `## Map` followed by the `## Per product` section of `references/create.md`, with `$SKILL` replaced by the skill path. Workers never read the references: anything they need must be in the prompt.
+- Build each prompt from the worker template in `references/create.md` (`## Worker prompt template`): absolute paths for `{{SKILL}}`, `{{DIR}}`, `{{WORKLIST_PATH}}`, `{{PRODUCTS_PATH}}`, `{{STATE_PATH}}`, `{{RESULT_PATH}}` (`results/worker-<n>.jsonl`) and `{{WORK_DIR}}` (`<dir>/tmp/worker-<n>/`, one per worker), the full `started_at` timestamp of `state.json` for `{{MIGRATION_STARTED_AT}}`, the block of `references/create.md` `## Worker MCP rules` for `{{MCP_RULES}}`, and for `{{PER_PRODUCT}}` the fields table of `references/products.md` `## Map` followed by the `## Per product` section of `references/create.md`, with `$SKILL` replaced by the skill path. Workers never read the references: anything they need must be in the prompt.
 - Workers (or you, in sequential mode) append one line per product to `results/worker-<n>.jsonl` with `state.py result`, every item with its `ref` (SKU, option title, `<option>:<value>` or `namespace.key`), and return a 3-line summary only. Do not ask them for details: read the state instead.
 - After all workers return (or after each sequential batch), run `$S/state.py merge <dir>` before anything else. It rejects lines whose handle is not in that worker's worklist, or claimed by several workers with different IRIs, and writes them to `results/rejected-<stamp>.jsonl`: show them to the developer.
 

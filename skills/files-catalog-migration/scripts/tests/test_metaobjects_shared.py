@@ -80,6 +80,8 @@ class MetaobjectsSharedTest(ConceptTestCase):
             "type": "/api/metafield_definition_types/metaobject_reference",
             "validations": [{"name": REFERENCE_VALIDATION, "value": "<metaobject_definition:marque IRI>"}]})
         self.assertEqual(reference["spec"], {"type": "metaobject_reference", "name": "Marque"})
+        self.assertEqual(reference["lookup"], "list_metafield_definitions with ownerType products (every page), "
+                                              "then filter namespace 'custom' and key 'marque' client side")
 
     def test_recorded_definition_is_resolved(self):
         state.record_shared(self.st, "metaobject_definition:marque", fake_iri("metaobject_definition:marque"),

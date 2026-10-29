@@ -11,6 +11,9 @@ block: run extract.py <dir> <concept> again), when a concept file differs from i
 (warnings aside: run state.py decide again), or when the status_mode / data_language decisions are missing or
 invalid.
 
+The `MCP effort` line estimates the MCP calls after approval (shared elements, products to create, updates of a
+later phase) and their time, at about 8 s per call.
+
 In a later phase (state phase > 1) a `Changes (phase <n>):` section summarizes diff.json and plan_shared.py
 --changes, and the dry-run also blocks while diff.json is missing, from another phase or computed from another
 products.json or other decisions, while a changed or removed product has no snapshot read in this phase
@@ -44,6 +47,11 @@ MAX_CHANGED = 10
 SPEC_RESERVED = ("origin", "reason", "question")
 CONCEPTS = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
 CONCEPT_BLOCKING = ("list_in_single_field", "missing_sku", "too_long")
+# MCP effort estimate: calls per item and the seconds one call takes on average (first real run).
+SECONDS_PER_CALL = 8
+CALLS_PER_SHARED = 2  # lookup + create
+CALLS_PER_PRODUCT = 3  # lookup, create, marker
+CALLS_PER_UPDATED = 1  # lookup of the product, then one call per changed path group
 
 
 def read_json(path):
@@ -151,6 +159,44 @@ def to_create(data, state):
         "  options: %d" % options,
         "  option values: %d" % values,
     ]
+
+
+def product_calls(product, state):
+    """Lookup, creation and marker, then one call per option, option value, variant, metafield and sale offer, and
+    one per taxonomy or collections link."""
+    calls = CALLS_PER_PRODUCT + len(product.get("variants") or [])
+    calls += sum(1 + len(o["values"]) for o in product.get("options") or [])
+    for step in ("metafields", "prices", "taxonomy", "collections"):
+        try:
+            built = payload.build({"products": [product]}, state, product["handle"], step, placeholders=True)[step]
+        except payload.PayloadError:
+            continue
+        calls += len(built) if step in ("metafields", "prices") else (1 if built else 0)
+    return calls
+
+
+def update_calls(diff_data):
+    """A lookup per changed or removed product, then one call per path group: the product fields together, every
+    other path alone; one write per removed product."""
+    calls = 0
+    for change in (diff_data.get("changed") or {}).values():
+        paths = diff_module.change_paths(change)
+        product = any(path.startswith("product.") for path in paths)
+        calls += CALLS_PER_UPDATED + (1 if product else 0) + sum(1 for p in paths if not p.startswith("product."))
+    return calls + (CALLS_PER_UPDATED + 1) * len(diff_data.get("removed") or [])
+
+
+def effort(state, columns, products, diff_data=None):
+    """The MCP effort line: shared elements to create, products to create and, in a later phase, the updates."""
+    try:
+        shared = len(plan_shared.plan(state, columns)) if state else 0
+    except payload.PayloadError:
+        shared = 0
+    calls = CALLS_PER_SHARED * shared + sum(product_calls(p, state) for p in products)
+    if diff_data is not None and diff_data.get("phase") == state.get("phase", 1):
+        calls += update_calls(diff_data)
+    minutes = -(-calls * SECONDS_PER_CALL // 60)
+    return "MCP effort: ~%d calls, ~%d min (about %d s per call)" % (calls, minutes, SECONDS_PER_CALL)
 
 
 def descriptions(data):
@@ -513,6 +559,8 @@ def report(directory: str) -> Tuple[str, int]:
              "Status: %s" % (decisions.get("status_mode") or "(missing)")]
     lines += to_create(data, state)
     lines += changes
+    lines.append(effort(state, raw.get("metafield_columns"), split_products(data, state)[0],
+                        read_diff(workspace) if state.get("phase", 1) > 1 else None))
     lines += concepts_section(files, data["products"])
     if blocking or problems:
         lines.append("Blocking:")
