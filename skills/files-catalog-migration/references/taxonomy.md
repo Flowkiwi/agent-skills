@@ -60,6 +60,8 @@ Once a definition is created, pin its `code` in the mapping entry (`"code": "mat
 
 A product's values are the distinct non-empty results of `value` over its rows, in row order. An empty cell gives no value (never `Non`). Options of a `list` definition are its distinct values in order of first appearance, each with the cleaned cell it comes from (`source`, shown as `Acier inoxydable (from Inox)` in the preview). The definition is attached to the lowest common ancestor of the categories of its products (or to each root when they share none). Products without category lose their values (`uncategorized_values`). A number column gets its unit with `suffix` (the `Puissance` entry above): option `1400 W`, source `1400`.
 
+An attribute is a list of options or a text: there is no sorting and no range filter on it. A numeric column with more than 12 distinct values therefore stays a metafield (typed number, `references/metafields.md`), and `columns.py propose` says so in its reason (`number values, 40 distinct: metafield (attributes have no ranges)`). A measure with few distinct values (sizes, capacities) may be a `list` attribute with its unit as `suffix`. Give the developer this explanation when they ask why a numeric column is not an attribute.
+
 1. **Candidates**: the rows of `$S/columns.py propose <dir>` with role `attribute` (its type `list` or `string`), and the `value_variants` flags of those columns in `inventory.json` (`Inox`, `inox`).
 2. **One table**: show every candidate in one table and ask once for the whole table, not column by column:
 

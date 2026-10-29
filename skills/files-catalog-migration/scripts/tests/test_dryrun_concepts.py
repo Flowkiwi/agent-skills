@@ -75,6 +75,41 @@ class DryRunConceptsTest(unittest.TestCase):
                      "      FR: TVA 20 FR 20% (to create)"):
             self.assertIn(line, concepts)
 
+    def test_vendor_without_the_map_of_a_metaobject_field_warns_without_blocking(self):
+        text, code = dryrun.report(self.dir)
+        line = ("    vendor reads main:marque without the map applied to metaobject marque.nom: copy the map to "
+                "product.vendor if the brand names should match")
+        self.assertEqual(code, 0)
+        self.assertIn(line, text[text.index("Concepts:"):text.index("Blocking:")].splitlines())
+
+    def test_vendor_warning_compares_resolved_columns(self):
+        self.edit_mapping("metaobjects", lambda m: m["definitions"][0]["fields"][0]["value"].update(
+            {"from": ["main:Marque"]}))
+        self.edit_mapping("products", lambda m: m["product"]["vendor"].update({"from": ["main:@F"]}))
+        text, _ = dryrun.report(self.dir)
+        self.assertIn("    vendor reads main:@F without the map applied to metaobject marque.nom:", text)
+
+    def test_vendor_with_the_same_map_does_not_warn(self):
+        def copy_map(m):
+            m["product"]["vendor"].update({"map": {"toastine": "Toastine"}, "map_ignore_case": True})
+        self.edit_mapping("products", copy_map)
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("vendor reads", text)
+
+    def test_vendor_with_another_map_warns(self):
+        self.edit_mapping("products", lambda m: m["product"]["vendor"].update({"map": {"toastine": "TOASTINE"}}))
+        text, _ = dryrun.report(self.dir)
+        self.assertIn("vendor reads main:marque without the map", text)
+
+    def test_vendor_on_another_column_or_field_without_map_does_not_warn(self):
+        self.edit_mapping("products", lambda m: m["product"]["vendor"].update({"from": ["main:ref_com"]}))
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("vendor reads", text)
+        self.edit_mapping("metaobjects", lambda m: m["definitions"][0]["fields"][0]["value"].pop("map"))
+        self.edit_mapping("products", lambda m: m["product"]["vendor"].update({"from": ["main:marque"]}))
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("vendor reads", text)
+
     def test_stale_decision_blocks(self):
         self.edit_mapping("taxonomy", lambda m: m["categories"].update(drop_levels=2))
         run("extract.py", self.dir, "taxonomy")

@@ -127,6 +127,13 @@ class TriageRulesTest(unittest.TestCase):
         ("10 half of the filled cells", column(distinct=10, filled=20), None, ("attribute", "list", "10 distinct values")),
         ("11 too many for few cells", column(distinct=7, filled=10), None, ("attribute", "string", "free text")),
         ("11 over 20 distinct values", column(distinct=21, filled=100), None, ("attribute", "string", "free text")),
+        ("12 number with few values", column(kind="number", distinct=12), None,
+         ("metafield", "single_line_text_field", "number values")),
+        ("12 number with many values", column(kind="number", distinct=13), None,
+         ("metafield", "single_line_text_field", "number values, 13 distinct: metafield (attributes have no ranges)")),
+        ("12 many values and suspect scale", column(kind="number", distinct=40, flags=[{"flag": "suspect_scale"}]),
+         None, ("metafield", "single_line_text_field",
+                "number values, 40 distinct: metafield (attributes have no ranges), suspect scale")),
     ]
 
     def test_rules(self):

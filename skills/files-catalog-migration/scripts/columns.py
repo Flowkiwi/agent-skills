@@ -26,6 +26,7 @@ SPARSE_BELOW = 0.2
 DESCRIPTION_LENGTH = 255
 LIST_MAX_DISTINCT = 20
 LIST_MIN_DISTINCT = 6
+NUMBER_ATTRIBUTE_MAX = 12  # more distinct numbers than this: a metafield, attributes have no ranges
 PROPOSAL = os.path.join("tmp", "columns-proposal.json")
 ROLES = ("core", "attribute", "metafield", "description", "ignore")
 UNIT_RE = re.compile(r"[(\[]\s*[^\W\d_][^\W_]{0,2}(/[^\W\d_][^\W_]{0,2})?\s*[)\]]")
@@ -164,7 +165,10 @@ def classify(column: dict, values: List[str]) -> Tuple[str, Optional[str], str]:
         return "attribute", "list", "yes/no values"
     if kind in ("number", "date"):
         kind_type = "single_line_text_field" if kind == "date" else suggest_type(values)[0]
-        reason = "%s values" % kind + (", suspect scale" if first_flag(column, "suspect_scale") else "")
+        reason = "%s values" % kind
+        if kind == "number" and column["distinct"] > NUMBER_ATTRIBUTE_MAX:
+            reason += ", %d distinct: metafield (attributes have no ranges)" % column["distinct"]
+        reason += ", suspect scale" if first_flag(column, "suspect_scale") else ""
         return "metafield", kind_type, reason
     if column["distinct"] <= LIST_MAX_DISTINCT and column["distinct"] <= max(LIST_MIN_DISTINCT, column["filled"] // 2):
         return "attribute", "list", "%d distinct values" % column["distinct"]

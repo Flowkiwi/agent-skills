@@ -11,6 +11,10 @@ block: run extract.py <dir> <concept> again), when a concept file differs from i
 (warnings aside: run state.py decide again), or when the status_mode / data_language decisions are missing or
 invalid.
 
+The Concepts section also warns, without blocking, when `product.vendor` reads a column that a metaobject field
+reads with a `map` and vendor has no equivalent map (`vendor reads <column> without the map applied to metaobject
+<type>.<field>`): the brand names may differ between the vendor and the metaobject entries.
+
 The `MCP effort` line estimates the MCP calls after approval (shared elements, products to create, updates of a
 later phase) and their time, at about 8 s per call.
 
@@ -32,9 +36,12 @@ import sys
 from typing import List, Tuple
 
 import catalog
+import clean
 import diff as diff_module
 import payload
+import mapping as mapping_module
 import plan_shared
+from mapping import MappingError
 from metafields import suggest_type
 from state import forced, phase_decision
 
@@ -345,12 +352,43 @@ def concept_lines(concept: str, data: dict, products: List[dict]) -> List[str]:
         offers, max(0, pairs - offers), ", ".join(c.get("code") or "?" for c in countries) or "none")]
 
 
-def concepts_section(files, products) -> List[str]:
+def vendor_map_warnings(directory: str) -> List[str]:
+    """Non blocking: product.vendor reads a column that a metaobject field reads with a `map` (brand spelling
+    variants) while vendor has no equivalent map. Columns are compared once resolved (code, label or @letter)."""
+    try:
+        products_mapping = mapping_module.load_mapping(os.path.join(directory, "mappings", "products.json"))
+        vendor = (products_mapping.get("product") or {}).get("vendor")
+        if not isinstance(vendor, dict):
+            return []
+        sources = mapping_module.load_sources(directory, products_mapping, clean.Cleaner(clean.load_config(directory)))
+        vendor_columns = {mapping_module.resolve(ref, sources): ref for ref in mapping_module.mapping_refs(vendor)}
+        lines = []
+        for definition in read_json(os.path.join(directory, "mappings", "metaobjects.json")).get("definitions") or []:
+            for field in definition.get("fields") or []:
+                spec = field.get("value")
+                if not mapping_module.is_spec(spec) or not spec.get("map"):
+                    continue
+                same_map = (vendor.get("map") == spec["map"]
+                            and bool(vendor.get("map_ignore_case")) == bool(spec.get("map_ignore_case")))
+                shared = {mapping_module.resolve(ref, sources) for ref in mapping_module.mapping_refs(spec)}
+                for column, ref in vendor_columns.items():
+                    if column in shared and not same_map:
+                        lines.append("    vendor reads %s without the map applied to metaobject %s.%s: copy the map "
+                                     "to product.vendor if the brand names should match" % (
+                                         ref, definition["type"], field["key"]))
+        return lines
+    except (MappingError, ValueError, OSError):
+        return []
+
+
+def concepts_section(files, products, directory: str = None) -> List[str]:
     if not files:
         return ["Concepts: none"]
     lines = ["Concepts:"]
     for concept, data in files:
         lines += concept_lines(concept, data, products) + name_lines(concept, data)
+        if concept == "metaobjects" and directory:
+            lines += vendor_map_warnings(directory)
         if data.get("warnings"):
             lines += indented(catalog.format_warnings(data["warnings"]), "    ")
     return lines
@@ -561,7 +599,7 @@ def report(directory: str) -> Tuple[str, int]:
     lines += changes
     lines.append(effort(state, raw.get("metafield_columns"), split_products(data, state)[0],
                         read_diff(workspace) if state.get("phase", 1) > 1 else None))
-    lines += concepts_section(files, data["products"])
+    lines += concepts_section(files, data["products"], workspace)
     if blocking or problems:
         lines.append("Blocking:")
         if blocking:
