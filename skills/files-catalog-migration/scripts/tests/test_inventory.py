@@ -4,7 +4,7 @@ import os
 import sys
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from decimal import Decimal
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -117,6 +117,84 @@ class InventoryTest(unittest.TestCase):
         self.assertNotIn("A Sku Marchand", printed)
         self.assertEqual(os.listdir(self.dir).count("inventory.json"), 1)
         self.assertEqual([n for n in os.listdir(self.dir) if n.endswith(".tmp")], [])
+
+
+class ConstantFlagTest(unittest.TestCase):
+    def flags(self, rows):
+        return inventory.sheet_inventory(make_table(rows), header_rows=1)["columns"][0]["flags"]
+
+    def test_one_distinct_value_in_at_least_two_cells(self):
+        self.assertEqual(self.flags([["a"], ["Inox"], ["Inox"], [None]]), [{"flag": "constant", "value": "Inox"}])
+
+    def test_one_filled_cell_is_not_constant(self):
+        self.assertEqual(self.flags([["a"], ["Inox"], [None]]), [])
+
+    def test_an_empty_column_is_not_constant(self):
+        self.assertEqual(self.flags([["a"], [None], [None]]), [{"flag": "empty"}])
+
+    def test_two_values_are_not_constant(self):
+        self.assertEqual(self.flags([["a"], ["Inox"], ["inox"]])[0]["flag"], "value_variants")
+
+    def test_format_inventory_shows_the_value(self):
+        inv = {"files": [{"file": "f.csv", "sheets": [inventory.sheet_inventory(
+            make_table([["a", "b"], ["Inox", "1"], ["Inox", "2"]]), header_rows=1)]}]}
+        self.assertIn("A a: text, filled 1.0, flags constant Inox", inventory.format_inventory(inv))
+
+
+class RowReaderTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = make_workspace(self)
+
+    def run_cli(self, *args):
+        out, err = io.StringIO(), io.StringIO()
+        with redirect_stdout(out), redirect_stderr(err):
+            code = inventory.main([self.dir] + list(args))
+        return code, out.getvalue(), err.getvalue()
+
+    def test_prints_one_line_per_column_of_the_sheet_row(self):
+        code, out, _ = self.run_cli("--row", "3")
+        lines = out.splitlines()
+        self.assertEqual(code, 0)
+        self.assertEqual(lines[0], "demo-catalogue.xlsx / Catalogue row 3:")
+        self.assertEqual(len(lines), 1 + 18)
+        self.assertEqual(lines[1], "A Sku Marchand [sku_marchand]: 1001")
+        self.assertEqual(lines[4], "D Descriptif court [accroche]: Grille-pain 2 fentes Inox 1400W | TOASTINE")
+        self.assertEqual(lines[8], "H [Dimensions] Poids Net (kg) [dim_poids_net]: 1.8")
+        self.assertTrue(any(line.endswith(": (empty)") for line in lines))
+
+    def test_columns_by_code_label_or_letter(self):
+        code, out, _ = self.run_cli("--row", "3", "--columns", "sku_marchand,Descriptif court,@G")
+        self.assertEqual(code, 0)
+        self.assertEqual(out.splitlines()[1:], [
+            "A Sku Marchand [sku_marchand]: 1001",
+            "D Descriptif court [accroche]: Grille-pain 2 fentes Inox 1400W | TOASTINE",
+            "G Poids net du produit [poids_net]: 1,8"])
+
+    def test_several_rows_and_the_second_file_and_sheet(self):
+        code, out, _ = self.run_cli("--row", "2", "--row", "3", "--file", "demo-tarifs.csv")
+        self.assertEqual(code, 0)
+        self.assertEqual([line for line in out.splitlines() if line.endswith(":")],
+                         ["demo-tarifs.csv / csv row 2:", "demo-tarifs.csv / csv row 3:"])
+        code, out, _ = self.run_cli("--row", "1", "--sheet", "Notes")
+        self.assertEqual((code, out.splitlines()[0]), (0, "demo-catalogue.xlsx / Notes row 1:"))
+
+    def test_does_not_write_inventory_json(self):
+        self.run_cli("--row", "3")
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "inventory.json")))
+
+    def test_errors_exit_1_without_a_trace(self):
+        for args in (["--row", "99"], ["--row", "0"], ["--row", "3", "--columns", "nope"],
+                     ["--row", "3", "--columns", "@ZZ"], ["--row", "3", "--file", "nope.csv"],
+                     ["--row", "3", "--sheet", "nope"]):
+            with self.subTest(args=args):
+                code, out, err = self.run_cli(*args)
+                self.assertEqual((code, out), (1, ""))
+                self.assertTrue(err.startswith("error: "))
+
+    def test_options_without_row_are_refused(self):
+        code, _, err = self.run_cli("--columns", "A")
+        self.assertEqual(code, 2)
+        self.assertIn("need --row", err)
 
 
 class HelpersTest(unittest.TestCase):

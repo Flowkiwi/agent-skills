@@ -11,6 +11,7 @@ keeps them whole).
 """
 import json
 import os
+import re
 import sys
 from typing import List, Optional, Set, Tuple
 
@@ -27,6 +28,7 @@ LIST_MAX_DISTINCT = 20
 LIST_MIN_DISTINCT = 6
 PROPOSAL = os.path.join("tmp", "columns-proposal.json")
 ROLES = ("core", "attribute", "metafield", "description", "ignore")
+UNIT_RE = re.compile(r"[(\[]\s*[^\W\d_][^\W_]{0,2}(/[^\W\d_][^\W_]{0,2})?\s*[)\]]")
 MAX_WIDTHS = {"column": 40, "label": 40, "reason": 60}
 
 
@@ -52,20 +54,78 @@ def is_duplicate(column: dict, same: Optional[dict], columns: Optional[List[dict
     return not (column["kind"] == "boolean" and other is not None and other.get("kind") == "boolean")
 
 
+def has_unit(column: dict) -> bool:
+    return bool(UNIT_RE.search(column.get("label") or ""))
+
+
+def ignored_alone(column: dict) -> bool:
+    return bool(first_flag(column, "empty") or column["fill_rate"] < SPARSE_BELOW or first_flag(column, "constant"))
+
+
+def relation(column: dict, columns: Optional[List[dict]]) -> Optional[Tuple[dict, Optional[dict]]]:
+    """(flag, other column) of the duplicate relation a column holds with an earlier column, if any."""
+    same = first_flag(column, "same_values")
+    flag = same if is_duplicate(column, same, columns) else first_flag(column, "similar_label")
+    if flag is None:
+        return None
+    other = next((c for c in columns or [] if c.get("letter") == flag["with"]), None)
+    if other is not None and ignored_alone(other):
+        return None
+    return flag, other
+
+
+def winner_of(earlier: dict, later: dict) -> dict:
+    """The column to keep of a duplicate pair: better fill rate, then explicit unit in the label, then the earlier."""
+    if earlier["fill_rate"] != later["fill_rate"]:
+        return earlier if earlier["fill_rate"] > later["fill_rate"] else later
+    return later if has_unit(later) and not has_unit(earlier) else earlier
+
+
+def loser_reason(flag: dict, winner: str) -> str:
+    if flag["flag"] == "same_values":
+        return "duplicate of %s" % winner
+    return 'similar to %s (%d conflicts): merge into one "from", winner first' % (winner, flag["conflicts"])
+
+
+def duplicate_outcome(column: dict, columns: Optional[List[dict]]) -> Tuple[Optional[str], List[str]]:
+    """(reason to ignore the column as the losing side of a duplicate pair, letters of the columns it beats)."""
+    beaten = []  # type: List[str]
+    own = relation(column, columns)
+    if own is not None:
+        flag, other = own
+        if other is None or winner_of(other, column) is other:
+            return loser_reason(flag, flag["with"]), []
+        beaten.append(flag["with"])
+    for later in columns or []:
+        held = relation(later, columns) if later is not column else None
+        if held is None or held[0]["with"] != column.get("letter"):
+            continue
+        if winner_of(column, later) is later:
+            return loser_reason(held[0], later["letter"]), []
+        beaten.append(later["letter"])
+    return None, beaten
+
+
 def triage(column: dict, values: List[str], columns: Optional[List[dict]] = None) -> Tuple[str, Optional[str], str]:
     """(role, type, reason) of a column that the mapping does not read; columns: the other columns of its sheet."""
-    kind = column["kind"]
     if first_flag(column, "empty"):
         return "ignore", None, "empty"
     if column["fill_rate"] < SPARSE_BELOW:
         return "ignore", None, "sparse"
-    same = first_flag(column, "same_values")
-    if is_duplicate(column, same, columns):
-        return "ignore", None, "duplicate of %s" % same["with"]
-    similar = first_flag(column, "similar_label")
-    if similar:
-        return "ignore", None, 'similar to %s (%d conflicts): merge into one "from", winner first' % (
-            similar["with"], similar["conflicts"])
+    constant = first_flag(column, "constant")
+    if constant:
+        return "ignore", None, "constant: %s" % constant["value"]
+    loser, beaten = duplicate_outcome(column, columns)
+    if loser:
+        return "ignore", None, loser
+    role, kind_type, reason = classify(column, values)
+    if beaten:
+        reason += ", winner over %s" % ", ".join(beaten)
+    return role, kind_type, reason
+
+
+def classify(column: dict, values: List[str]) -> Tuple[str, Optional[str], str]:
+    kind = column["kind"]
     if first_flag(column, "label_mismatch"):
         if column["max_length"] > DESCRIPTION_LENGTH:
             return "description", None, "long text under a label that says url"

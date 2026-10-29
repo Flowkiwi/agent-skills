@@ -34,6 +34,7 @@ Flags:
 | Flag               | Meaning                                                                                                                              |
 |--------------------|--------------------------------------------------------------------------------------------------------------------------------------|
 | `empty`            | no value in any data row                                                                                                             |
+| `constant`         | a single distinct value (`value`) in at least 2 filled cells; `columns.py` proposes `ignore`                                         |
 | `same_values`      | same values as the column `with` on every row where both are filled (set on the later column)                                        |
 | `similar_label`    | same label words as the column `with` (brackets, accents, stopwords ignored); `conflicts` = rows filled in both that differ          |
 | `label_mismatch`   | the label names a link (`pdf`, `url`, `lien`, `link`, `visuel`, `image`, `photo`) but under half of the values are URLs (`matching`) |
@@ -41,6 +42,16 @@ Flags:
 | `boolean_variants` | a column of yes/no answers (at least half of its values) spelling one answer several ways (`OUI`, `oui`, `Oui`)                      |
 | `value_variants`   | distinct values equal once case and accents are ignored (`Inox`, `inox`)                                                             |
 
+For a duplicate pair (`same_values`, `similar_label`), `columns.py propose` keeps the column with the higher fill rate; on equal rates, the one whose label holds an explicit unit in parentheses or brackets (`(cm)`, `[kg]`, `(W)`); otherwise the earlier one. The other is proposed as `ignore`, and the kept column's reason ends with `winner over <letter>`.
+
 After the run, summarize to the developer, sheet by sheet: the empty columns, the duplicates (`same_values`, `similar_label` with their conflict counts), the columns whose content does not match the label, the suspect scales and the spelling variants.
 
 The inventory is the input of every mapping. Never re-read a source file to answer a question the inventory answers; when a sample is not enough, run the inventory again with more `--samples`.
+
+### Look at a row
+
+To see the values of a given row (to check a warning, a join key, a doubtful cell), never open the file: run `$S/inventory.py <dir> --row <n>`. `<n>` is the sheet row number, as in the warnings. It prints the cleaned cells of that row of the first file and sheet, one line per column (`<letter> <label> [<code>]: <value>`, `(empty)` for an empty cell), and does not rewrite `inventory.json`.
+
+- `--row` can be repeated to print several rows.
+- `--file <name>` and `--sheet <name>` pick another file or sheet.
+- `--columns <c1,c2,...>` keeps only the named columns, each given as a technical code, a label or `@<letter>` (the same references as the mapping).

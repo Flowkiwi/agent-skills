@@ -2,6 +2,8 @@
 """Inventory the files of <dir>/sources/: sheets, header rows, columns with fill rate, samples and defect flags.
 
 Usage: inventory.py <dir> [--samples 5]    writes <dir>/inventory.json and prints the flagged columns
+       inventory.py <dir> --row <n> [--row <m> ...] [--file <name>] [--sheet <name>] [--columns <c1,c2,...>]
+                                       prints the cleaned cells of sheet row n (inventory.json is not rewritten)
 """
 import argparse
 import datetime
@@ -18,7 +20,7 @@ from typing import Dict, List, Optional, Sequence
 
 from clean import clean_text
 from intake import sha256
-from sources import CSV_EXTENSIONS, XLSX_EXTENSIONS, Table, column_letter, read_source
+from sources import CSV_EXTENSIONS, XLSX_EXTENSIONS, Table, column_index, column_letter, read_source
 
 VERSION = 1
 CODE_RE = re.compile(r"^[a-z][a-z0-9_.\-]*$")
@@ -170,6 +172,8 @@ def column_flags(index: int, columns: List[dict], values: List[List[Optional[str
     flags = []  # type: List[dict]
     if not filled:
         flags.append({"flag": "empty"})
+    if len(filled) >= 2 and len(distinct(filled)) == 1:
+        flags.append({"flag": "constant", "value": filled[0]})
     for other in range(index):
         pairs = [(a, b) for a, b in zip(values[other], own) if a is not None and b is not None]
         if pairs and all(a == b for a, b in pairs):
@@ -290,6 +294,8 @@ def format_flag(flag: dict) -> str:
         return "%s %s" % (name, ", ".join(flag["values"]))
     if name == "value_variants":
         return "value_variants %s" % ", ".join("/".join(group) for group in flag["groups"])
+    if name == "constant":
+        return "constant %s" % flag["value"]
     return name
 
 
@@ -312,14 +318,93 @@ def format_inventory(inv: dict) -> str:
     return "\n".join(lines)
 
 
+def pick_table(directory: str, file: Optional[str], sheet: Optional[str]) -> Table:
+    paths = source_files(directory)
+    if file is not None:
+        paths = [p for p in paths if os.path.basename(p) == file]
+        if not paths:
+            raise ValueError("no file '%s' in sources/ (files: %s)" % (
+                file, ", ".join(os.path.basename(p) for p in source_files(directory)) or "none"))
+    if not paths:
+        raise ValueError("no source file in sources/")
+    path = paths[0]
+    try:
+        tables = read_source(path)
+    except (ValueError, KeyError, OSError, zipfile.BadZipFile, ET.ParseError) as error:
+        raise ValueError("%s: cannot be read (%s)" % (os.path.basename(path), error))
+    if sheet is not None:
+        tables = [t for t in tables if t.name == sheet]
+        if not tables:
+            raise ValueError("no sheet '%s' in %s" % (sheet, os.path.basename(path)))
+    if not tables:
+        raise ValueError("%s has no sheet" % os.path.basename(path))
+    return tables[0]
+
+
+def pick_columns(columns: List[dict], refs: Sequence[str]) -> List[int]:
+    chosen = []  # type: List[int]
+    for ref in refs:
+        if ref.startswith("@"):
+            index = column_index(ref[1:]) if re.match(r"^[A-Za-z]{1,3}$", ref[1:]) else -1
+            if not 0 <= index < len(columns):
+                raise ValueError("no column %s (last column: @%s)" % (ref, column_letter(len(columns) - 1)))
+            chosen.append(index)
+            continue
+        wanted = clean_text(ref)
+        for key in ("code", "label"):
+            found = [i for i, c in enumerate(columns) if c[key] is not None and c[key] == wanted]
+            if len(found) > 1:
+                raise ValueError("'%s' matches several columns (%s); use @<letter>" % (
+                    ref, ", ".join(columns[i]["letter"] for i in found)))
+            if found:
+                chosen.append(found[0])
+                break
+        else:
+            raise ValueError("no column '%s'; use a technical code, a label or @<letter>" % ref)
+    return chosen
+
+
+def format_rows(table: Table, numbers: Sequence[int], refs: Sequence[str] = ()) -> str:
+    columns = sheet_inventory(table)["columns"]
+    indexes = pick_columns(columns, refs) if refs else list(range(len(columns)))
+    lines = []  # type: List[str]
+    for number in numbers:
+        if not 1 <= number <= len(table.rows):
+            raise ValueError("no row %d in %s / %s (rows 1 to %d)" % (number, table.file, table.name, len(table.rows)))
+        row = table.rows[number - 1]
+        lines.append("%s / %s row %d:" % (table.file, table.name, number))
+        for i in indexes:
+            column = columns[i]
+            value = cleaned(row[i]) if i < len(row) else None
+            lines.append("%s %s%s: %s" % (
+                column["letter"], column["label"] or "(no label)", " [%s]" % column["code"] if column["code"] else "",
+                value.replace("\n", "\\n") if value is not None else "(empty)"))
+    return "\n".join(lines)
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.strip().splitlines()[0])
     parser.add_argument("dir")
     parser.add_argument("--samples", type=int, default=5, help="distinct values kept per column (default 5)")
+    parser.add_argument("--row", type=int, action="append", help="sheet row number to print (repeatable)")
+    parser.add_argument("--file", help="with --row: source file name (default: the first one)")
+    parser.add_argument("--sheet", help="with --row: sheet name (default: the first one)")
+    parser.add_argument("--columns", help="with --row: only these columns, comma separated (code, label or @letter)")
     args = parser.parse_args(argv)
     if not os.path.isdir(args.dir):
         print("error: %s is not a directory" % args.dir, file=sys.stderr)
         return 2
+    if args.row is None and (args.file or args.sheet or args.columns):
+        print("error: --file, --sheet and --columns need --row", file=sys.stderr)
+        return 2
+    if args.row is not None:
+        try:
+            refs = [r.strip() for r in args.columns.split(",") if r.strip()] if args.columns else []
+            print(format_rows(pick_table(args.dir, args.file, args.sheet), args.row, refs))
+        except ValueError as error:
+            print("error: %s" % error, file=sys.stderr)
+            return 1
+        return 0
     try:
         inv = inventory(args.dir, args.samples)
     except ValueError as error:

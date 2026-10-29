@@ -105,7 +105,11 @@ class TriageRulesTest(unittest.TestCase):
         ("2 empty", column(flags=[{"flag": "empty"}], fill_rate=0.0), None, ("ignore", None, "empty")),
         ("2 sparse", column(fill_rate=0.1), None, ("ignore", None, "sparse")),
         ("3 duplicate", column(flags=SAME_AS_A), None, ("ignore", None, "duplicate of A")),
-        ("3 constant value", column(flags=SAME_AS_A, distinct=1), None, ("attribute", "list", "1 distinct values")),
+        ("3 constant column", column(flags=[{"flag": "constant", "value": "Inox"}], distinct=1), None,
+         ("ignore", None, "constant: Inox")),
+        ("3 constant column that also copies another", column(flags=SAME_AS_A + [{"flag": "constant", "value": "1"}],
+                                                              distinct=1), None, ("ignore", None, "constant: 1")),
+        ("3 same values, one distinct value", column(flags=SAME_AS_A, distinct=1), None, ("attribute", "list", "1 distinct values")),
         ("3 two yes/no columns", column(flags=SAME_AS_A, kind="boolean", distinct=2),
          [column(letter="A", kind="boolean")], ("attribute", "list", "yes/no values")),
         ("3 yes/no copy of a text column", column(flags=SAME_AS_A, kind="boolean", distinct=2),
@@ -127,6 +131,64 @@ class TriageRulesTest(unittest.TestCase):
         for rule, col, sheet, expected in self.CASES:
             with self.subTest(rule=rule):
                 self.assertEqual(columns.triage(col, ["v"], sheet), expected)
+
+
+def pair(*specs):
+    """Sheet columns A, B...: (fill_rate, label, flags) each."""
+    return [column(letter=chr(65 + i), fill_rate=rate, label=label, flags=flags)
+            for i, (rate, label, flags) in enumerate(specs)]
+
+
+class DuplicateWinnerTest(unittest.TestCase):
+    def triage_all(self, sheet):
+        return [columns.triage(c, ["v"], sheet) for c in sheet]
+
+    def test_the_better_filled_column_wins_whatever_its_position(self):
+        sheet = pair((0.78, "Hauteur du produit", []),
+                     (0.97, "[Dimensions] Hauteur produit (cm)", [{"flag": "same_values", "with": "A"}]))
+        a, b = self.triage_all(sheet)
+        self.assertEqual(a, ("ignore", None, "duplicate of B"))
+        self.assertEqual(b, ("attribute", "list", "3 distinct values, winner over A"))
+
+    def test_the_earlier_wins_a_better_fill_rate_and_gets_the_suffix(self):
+        sheet = pair((0.9, "Hauteur", []), (0.8, "Hauteur (cm)", [{"flag": "same_values", "with": "A"}]))
+        a, b = self.triage_all(sheet)
+        self.assertEqual(a, ("attribute", "list", "3 distinct values, winner over B"))
+        self.assertEqual(b, ("ignore", None, "duplicate of A"))
+
+    def test_equal_fill_rate_prefers_the_explicit_unit(self):
+        for label in ("Hauteur (cm)", "Poids [kg]", "Puissance (W)", "Debit (m3/h)"):
+            with self.subTest(label=label):
+                sheet = pair((0.9, "Mesure", []), (0.9, label, [{"flag": "same_values", "with": "A"}]))
+                self.assertEqual(self.triage_all(sheet)[0], ("ignore", None, "duplicate of B"))
+
+    def test_a_category_in_brackets_is_not_a_unit(self):
+        sheet = pair((0.9, "Hauteur", []), (0.9, "[Dimensions] Hauteur", [{"flag": "same_values", "with": "A"}]))
+        self.assertEqual(self.triage_all(sheet)[1], ("ignore", None, "duplicate of A"))
+
+    def test_equal_everything_keeps_the_earlier_column(self):
+        sheet = pair((0.9, "Hauteur (cm)", []), (0.9, "Hauteur (mm)", [{"flag": "same_values", "with": "A"}]))
+        a, b = self.triage_all(sheet)
+        self.assertEqual(a[2], "3 distinct values, winner over B")
+        self.assertEqual(b, ("ignore", None, "duplicate of A"))
+
+    def test_similar_label_names_the_winner_and_keeps_the_conflicts(self):
+        similar = [{"flag": "similar_label", "with": "A", "conflicts": 2}]
+        sheet = pair((0.5, "Poids net", []), (0.9, "Poids net (kg)", similar))
+        a, b = self.triage_all(sheet)
+        self.assertEqual(a, ("ignore", None, 'similar to B (2 conflicts): merge into one "from", winner first'))
+        self.assertEqual(b[2], "3 distinct values, winner over A")
+
+    def test_a_partner_that_is_ignored_anyway_does_not_take_part(self):
+        sheet = pair((0.1, "Poids", []), (0.9, "Poids (kg)", [{"flag": "same_values", "with": "A"}]))
+        self.assertEqual(self.triage_all(sheet)[1][2], "3 distinct values")
+
+    def test_two_losers_of_one_winner(self):
+        sheet = pair((0.9, "Hauteur", []), (0.5, "Haut", [{"flag": "same_values", "with": "A"}]),
+                     (0.4, "Haut. (cm)", [{"flag": "same_values", "with": "A"}]))
+        a, b, c = self.triage_all(sheet)
+        self.assertEqual(a[2], "3 distinct values, winner over B, C")
+        self.assertEqual((b[2], c[2]), ("duplicate of A", "duplicate of A"))
 
 
 class FormatTableTest(unittest.TestCase):

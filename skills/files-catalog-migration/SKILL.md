@@ -29,7 +29,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 - **One data language.** Every name or label the migration writes that does not come verbatim from the source files (categories, attribute definitions and options, metafield definition names and descriptions, the marker definition, collections, option labels...) is in the data language recorded in Phase 2 (`decisions.data_language`), never in English by default and never in the language of this conversation.
 - **Scripts compute, you propose.** Everything sent to Flowkiwi comes from a script output (`extract.py`, `payload.py`, `plan_shared.py`). Never clean, convert or retype a value yourself.
 - **Never edit structured files by hand** (`products.json`, `concepts/*.json`, `state.json`): change `mappings/` or `fixes.json` and run the script again.
-- **Client files are read-only.** They are copied into `sources/` by `intake.py`; never open a whole file in the conversation, read `inventory.json` samples instead.
+- **Client files are read-only.** They are copied into `sources/` by `intake.py`; never open a whole file in the conversation, read `inventory.json` samples instead, or the cells of one row with `$S/inventory.py <dir> --row <n>`.
 - **Every decision has an origin** (`developer`, `agent`, `client`). A choice you make without the developer's answer is recorded `agent` with its reason, in the data language.
 - **No magic.** Never present a proposed value, category or description as a fact from the data.
 - **Half a day.** Group questions per concept, always with a default proposal; only ask about real ambiguities.
@@ -48,7 +48,7 @@ Guide a Flowkiwi developer from client spreadsheet files (xlsx, csv, old xls) to
 ~5 min. Read `references/sources.md`.
 
 1. **Files**: ask for the client files (dropped in the conversation, or their paths). `$S/intake.py add <dir> <path>...` copies them into `sources/` (exit codes and conversion of old `.xls` files in `references/sources.md`). A new version of a file later: add it again with `--replace`.
-2. **Inventory**: `$S/inventory.py <dir>`, then summarize the defects to the developer, sheet by sheet (`references/sources.md` `## Inventory`). Never open a source file: `inventory.json` answers the questions (`--samples 10` when more values are needed).
+2. **Inventory**: `$S/inventory.py <dir>`, then summarize the defects to the developer, sheet by sheet (`references/sources.md` `## Inventory`). Never open a source file: `inventory.json` answers the questions (`--samples 10` when more values are needed, `--row <n>` to see one row).
 3. **Cleaning**: show `$S/clean.py table` once and ask "Keep these rules for this client?". Changes go to `<dir>/mappings/cleaning.json` (format in `references/state.md`). The answer is recorded once the state exists (Phase 2 step 5).
 
 ## Phase 2 - Concepts
