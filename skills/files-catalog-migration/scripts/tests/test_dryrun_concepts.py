@@ -110,6 +110,38 @@ class DryRunConceptsTest(unittest.TestCase):
         text, _ = dryrun.report(self.dir)
         self.assertNotIn("vendor reads", text)
 
+    def old_reference_validation(self):
+        """A workspace extracted when reference_validation defaulted to true: the mapping leaves it out."""
+        self.edit_mapping("metaobjects", lambda m: m.pop("reference_validation"))
+        run("extract.py", self.dir, "metaobjects")
+        path = os.path.join(self.dir, "concepts", "metaobjects.json")
+        concept = read_json(path)
+        concept["reference_validation"] = True
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(concept, f, ensure_ascii=False)
+        self.decide("metaobjects", origin=("--origin", "agent", "--reason", "Une fiche par marque."))
+
+    def test_reference_validation_left_from_an_old_extract_warns_without_blocking(self):
+        self.old_reference_validation()
+        text, code = dryrun.report(self.dir)
+        self.assertEqual(code, 0, text)
+        concepts = text[text.index("Concepts:"):text.index("Blocking:")].splitlines()
+        line = next(l for l in concepts if "reference_validation" in l)
+        self.assertTrue(line.startswith("    decision metaobjects has reference_validation true while "
+                                        "mappings/metaobjects.json leaves it out (default false):"), line)
+        self.assertIn("extract.py %s metaobjects" % self.dir, line)
+        self.assertIn("state.py decide %s --key metaobjects" % self.dir, line)
+        self.assertIn("--origin agent --reason", line)
+
+    def test_reference_validation_set_in_the_mapping_or_false_does_not_warn(self):
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("reference_validation", text)
+        self.edit_mapping("metaobjects", lambda m: m.pop("reference_validation"))
+        run("extract.py", self.dir, "metaobjects")
+        self.decide("metaobjects")
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("reference_validation", text)
+
     def test_stale_decision_blocks(self):
         self.edit_mapping("taxonomy", lambda m: m["categories"].update(drop_levels=2))
         run("extract.py", self.dir, "taxonomy")

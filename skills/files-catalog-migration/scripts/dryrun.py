@@ -13,7 +13,9 @@ invalid.
 
 The Concepts section also warns, without blocking, when `product.vendor` reads a column that a metaobject field
 reads with a `map` and vendor has no equivalent map (`vendor reads <column> without the map applied to metaobject
-<type>.<field>`): the brand names may differ between the vendor and the metaobject entries.
+<type>.<field>`): the brand names may differ between the vendor and the metaobject entries. It also warns when the
+metaobjects decision has `reference_validation` true while mappings/metaobjects.json leaves it out (default false):
+a concept extracted when the default was true, to extract and record again.
 
 The `MCP effort` line estimates the MCP calls after approval (shared elements, products to create, updates of a
 later phase) and their time, at about 8 s per call.
@@ -381,7 +383,25 @@ def vendor_map_warnings(directory: str) -> List[str]:
         return []
 
 
-def concepts_section(files, products, directory: Optional[str] = None) -> List[str]:
+def reference_validation_warnings(directory: str, state: dict) -> List[str]:
+    """Non blocking: the metaobjects decision still has reference_validation true from an extract made when it
+    defaulted to true, while the mapping leaves it out (now false)."""
+    decision = (state.get("decisions") or {}).get("metaobjects")
+    if not isinstance(decision, dict) or decision.get("reference_validation") is not True:
+        return []
+    try:
+        m = read_json(os.path.join(directory, "mappings", "metaobjects.json"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(m, dict) or "reference_validation" in m:
+        return []
+    meta = (state.get("decision_meta") or {}).get("metaobjects") or {}
+    return ["    decision metaobjects has reference_validation true while mappings/metaobjects.json leaves it out "
+            "(default false): run extract.py %s metaobjects again, then %s" % (
+                shlex.quote(directory), decide_command(directory, "metaobjects", meta))]
+
+
+def concepts_section(files, products, directory: Optional[str] = None, state: Optional[dict] = None) -> List[str]:
     if not files:
         return ["Concepts: none"]
     lines = ["Concepts:"]
@@ -389,6 +409,7 @@ def concepts_section(files, products, directory: Optional[str] = None) -> List[s
         lines += concept_lines(concept, data, products) + name_lines(concept, data)
         if concept == "metaobjects" and directory:
             lines += vendor_map_warnings(directory)
+            lines += reference_validation_warnings(directory, state or {})
         if data.get("warnings"):
             lines += indented(catalog.format_warnings(data["warnings"]), "    ")
     return lines
@@ -599,7 +620,7 @@ def report(directory: str) -> Tuple[str, int]:
     lines += changes
     lines.append(effort(state, raw.get("metafield_columns"), split_products(data, state)[0],
                         read_diff(workspace) if state.get("phase", 1) > 1 else None))
-    lines += concepts_section(files, data["products"], workspace)
+    lines += concepts_section(files, data["products"], workspace, state)
     if blocking or problems:
         lines.append("Blocking:")
         if blocking:
