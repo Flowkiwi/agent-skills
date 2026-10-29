@@ -60,7 +60,7 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("MCP rules:\n- Server:", text)
         self.assertIn("- Tools:", text)
         self.assertIn("use only the tools whose name starts with `%s` (server https://mcp.example.com)" % PREFIX, text)
-        self.assertIn("If no such tool is available, or several Flowkiwi servers match, stop and report it", text)
+        self.assertIn("If no such tool is available, or tools of more than one server start with this prefix, stop and report it", text)
         self.assertIn("- Schema refusal:", text)
         self.assertIn(os.path.join(SKILL_DIR, "scripts"), text)
 

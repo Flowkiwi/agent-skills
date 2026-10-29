@@ -53,7 +53,7 @@ Every worker prompt includes this block: `prompts.py` fills `{{TOOLS_PREFIX}}` a
 
 ````
 MCP rules:
-- Server: use only the tools whose name starts with `{{TOOLS_PREFIX}}` (server {{MCP_URL}}), the Flowkiwi tenant of this migration. If no such tool is available, or several Flowkiwi servers match, stop and report it: never pick another server or prefix.
+- Server: use only the tools whose name starts with `{{TOOLS_PREFIX}}` (server {{MCP_URL}}), the Flowkiwi tenant of this migration. If no such tool is available, or tools of more than one server start with this prefix, stop and report it: never pick another server or prefix.
 - Tools: the Flowkiwi MCP tools may be deferred: load them first (ToolSearch in Claude Code, with `{{TOOLS_PREFIX}}`; your client's tool search otherwise) before concluding a tool is missing. Run describe_operation before the first call of each operation run through call_operation or call_write_operation (path, query and body arguments).
 - Errors: a timeout, an HTTP 5xx and `rate limit exceeded` (HTTP 429) are handled alike: wait with `sleep 5`, then `sleep 15`, then `sleep 45` between attempts, and look up before any retry of a write (the first attempt may have gone through). Still failing after that: fail the item (the product, or the shared entry) with the error and go on.
 - Schema refusal: a schema or validation refusal (HTTP 400 or 422, "invalid", "expected string", ...) on a payload printed by a script fails the item with the error message. Never change a value, a type or a format to make it pass: the script output is the decision, the developer fixes the mapping.
