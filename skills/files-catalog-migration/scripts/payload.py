@@ -21,7 +21,9 @@ collections, to send with its existing ones), and `metafields` as
 "source": "<products.json metafield key, when renamed>"}}}
 with transform null (value as is), list_json, list, number, json or strip_html. The reference metafields of
 `metaobjects` (as written by metaobjects.py build) follow in the --step metafields output: definition IRI from shared
-`metafield_definition:<namespace.key>`, value the IRI of shared `metaobject:<type>:<entry handle>`.
+`metafield_definition:<namespace.key>`, value the bare UUID of shared `metaobject:<type>:<entry handle>` (the
+last segment of its IRI, `<key UUID>` placeholder with --dry-run): the API refuses the IRI there.
+Numbers (transform number) are strings: the MCP only accepts a string metafield value.
 `prices` as written by prices.py build: one sale offer per variant and country, tax from the country or shared
 `tax:<code>:<rate>`, variant `<variant IRI of <sku>>` replaced by the worker with the IRI of that variant.
 
@@ -58,6 +60,7 @@ import os
 import re
 import sys
 import unicodedata
+from decimal import Decimal, InvalidOperation
 
 import state as state_module
 
@@ -66,6 +69,7 @@ MARKER_KEY = "metafield_definition:import.key"
 STEPS = ("product", "options", "variants", "metafields", "taxonomy", "collections", "prices", "all")
 TRANSFORMS = (None, "list_json", "list", "number", "json", "strip_html")
 ESCAPED_CATEGORIES = {"Cc", "Cf", "Zs", "Zl", "Zp"}
+UUID_SEGMENT = re.compile(r"/([0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12})$")
 
 
 class PayloadError(Exception):
@@ -95,6 +99,18 @@ def shared_iri(state, key, placeholders=False):
     if placeholders:
         return f"<{key} IRI>"
     raise PayloadError(f"shared element '{key}' is not recorded in state.json: create it, then state.py shared")
+
+
+def shared_uuid(state, key, placeholders=False):
+    """The bare UUID of a recorded shared element, the last segment of its IRI (`<key UUID>` placeholder)."""
+    iri = shared_iri(state, key, placeholders)
+    if placeholders and iri == f"<{key} IRI>":
+        return f"<{key} UUID>"
+    match = UUID_SEGMENT.search(iri)
+    if match is None:
+        raise PayloadError(f"shared element '{key}' is recorded with {iri!r}, not an IRI ending with a UUID: "
+                           "look it up again and record its @id with state.py shared")
+    return match.group(1)
 
 
 def status_iri(product, decisions):
@@ -211,6 +227,18 @@ def _list_values(value):
     return [v.strip() for v in re.split(r"[;\n]", value) if v.strip()]
 
 
+def _number_text(value):
+    """The number as a string (the MCP only accepts a string metafield value): decimal comma read as a dot,
+    no trailing zero, no exponent ("18,40" -> "18.4", "6.0" -> "6")."""
+    try:
+        number = Decimal(str(value).strip().replace(",", "."))
+    except InvalidOperation:
+        raise PayloadError(f"value {value!r} is not a number")
+    if not number.is_finite():
+        raise PayloadError(f"value {value!r} is not a number")
+    return "0" if number.is_zero() else format(number.normalize(), "f")
+
+
 def transform_value(value, transform):
     if transform not in TRANSFORMS:
         raise PayloadError(f"unknown metafield transform '{transform}', use one of {TRANSFORMS}")
@@ -221,11 +249,7 @@ def transform_value(value, transform):
     if transform == "list":
         return _list_values(value)
     if transform == "number":
-        number = value.strip().replace(",", ".")
-        try:
-            return int(number) if re.match(r"^-?\d+$", number) else float(number)
-        except ValueError:
-            raise PayloadError(f"value {value!r} is not a number")
+        return _number_text(value)
     if transform == "json":
         try:
             return json.loads(value)
@@ -251,7 +275,7 @@ def reference_metafields(product, state, placeholders=False):
         key = reference["metafield"]
         shared_key = f"metafield_definition:{key}"
         body = {"definition": shared_iri(state, shared_key, placeholders),
-                "value": shared_iri(state, f"metaobject:{definition['type']}:{entry}", placeholders)}
+                "value": shared_uuid(state, f"metaobject:{definition['type']}:{entry}", placeholders)}
         result.append({"key": key, "shared": shared_key, "body": body})
     return result
 

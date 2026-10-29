@@ -115,6 +115,44 @@ class ConflictsTest(unittest.TestCase):
                                "value": {"@id": "/api/metaobjects/e1", "handle": "brioche-co"}}]
         self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
 
+    def test_reference_iri_of_an_older_snapshot_compares_with_the_remote_uuid(self):
+        uuid = "00000000-0000-4000-8000-0000000000e1"
+        written = self.written()
+        written["metafields"] = [{"key": "custom.brand", "body": {"definition": "/api/metafield_definitions/b",
+                                                                  "value": "/api/metaobjects/" + uuid}}]
+        snap = self.snapshot()
+        snap["metafields"] = [{"definition": "/api/metafield_definitions/b", "value": uuid}]
+        self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
+
+    def test_string_numbers_compare_with_remote_numbers(self):
+        written = self.written()
+        written["metafields"] = [
+            {"key": "custom.%s" % k, "body": {"definition": "/api/metafield_definitions/%s" % k, "value": v}}
+            for k, v in (("a", "18.4"), ("b", "6"), ("c", "-0.5"), ("d", "6"))]
+        for remote in ((18.4, 6, -0.5, 6.0), ("18.40", "6", "-0.5", "6.0")):
+            snap = self.snapshot()
+            snap["metafields"] = [{"definition": "/api/metafield_definitions/%s" % k, "value": v}
+                                  for k, v in zip("abcd", remote)]
+            self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
+        snap["metafields"][0]["value"] = 18.5
+        self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)),
+                         {"metafields./api/metafield_definitions/a": {"written": "18.4", "flowkiwi": "18.5"}})
+
+    def test_reference_metafield_uuid_compares_with_remote_forms(self):
+        uuid = "00000000-0000-4000-8000-0000000000e1"
+        written = self.written()
+        written["metafields"] = [{"key": "custom.brand", "body": {"definition": "/api/metafield_definitions/b",
+                                                                  "value": uuid}}]
+        for value in (uuid, "/api/metaobjects/" + uuid, {"@id": "/api/metaobjects/" + uuid, "handle": "brioche-co"}):
+            snap = self.snapshot()
+            snap["metafields"] = [{"definition": {"@id": "/api/metafield_definitions/b"}, "value": value}]
+            self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)), {})
+        other = "00000000-0000-4000-8000-0000000000e2"
+        snap["metafields"][0]["value"] = {"@id": "/api/metaobjects/" + other}
+        self.assertEqual(diff.conflicts(diff.written_view(written), diff.remote_view(snap)),
+                         {"metafields./api/metafield_definitions/b": {"written": '"%s"' % uuid,
+                                                                       "flowkiwi": '"%s"' % other}})
+
     def test_variant_or_metafield_gone_or_added_in_flowkiwi(self):
         snap = self.snapshot()
         snap["variants"] = [{"sku": "1001-X", "barcode": "3601234560999"}]

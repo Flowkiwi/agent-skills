@@ -27,7 +27,7 @@ import os
 import sys
 from decimal import ROUND_HALF_UP, Decimal
 
-from payload import MARKER_KEY, PayloadError, dumps, shared_iri
+from payload import MARKER_KEY, UUID_SEGMENT, PayloadError, dumps, shared_iri
 from state import phase_decision
 
 OWNER_TYPE = "/api/metafield_owner_types/products"
@@ -189,7 +189,7 @@ def plan(state, metafield_columns=None, include_recorded=False):
             namespace_key = reference["metafield"]
             depends_on = []
             body = _metafield_definition(namespace_key, reference["name"], "metaobject_reference")
-            if metaobjects.get("reference_validation", True) is not False:
+            if metaobjects.get("reference_validation", False) is True:
                 body["validations"] = _metaobject_validation(state, definition["type"], depends_on)
             add(f"metafield_definition:{namespace_key}", "metaobjects", "create_metafield_definition",
                 f"list_metafield_definitions: namespace.key {namespace_key}, owner type products", body,
@@ -266,18 +266,26 @@ def _compare(kind, old, new):
 
 
 def _used_by(state, key):
-    """Shared keys a product item may hold and IRIs its written payload may contain for the key. A metaobject
-    definition is used through its reference metafield definition and its entries."""
+    """Shared keys a product item may hold and IRIs its written payload may contain for the key (an entry also as
+    its bare UUID, the value of a product reference metafield). A metaobject definition is used through its
+    reference metafield definition and its entries."""
     shared = state.get("shared", {})
     keys, iris = {key}, {shared.get(key, {}).get("iri")}
     kind, _, name = key.partition(":")
+    entries = [key] if kind == "metaobject" else []
     if kind == "metaobject_definition":
         metaobjects = state.get("decisions", {}).get("metaobjects")
         for definition in (metaobjects or {}).get("definitions", []) if isinstance(metaobjects, dict) else []:
             if definition.get("type") == name and (definition.get("reference") or {}).get("metafield"):
                 keys.add(f"metafield_definition:{definition['reference']['metafield']}")
-        iris.update(e.get("iri") for k, e in shared.items() if k.startswith(f"metaobject:{name}:"))
-    return keys, {json.dumps(iri) for iri in iris if iri}
+        entries += [k for k in shared if k.startswith(f"metaobject:{name}:")]
+    iris.update(shared[k].get("iri") for k in entries if k in shared)
+    texts = {json.dumps(iri) for iri in iris if iri}
+    for k in entries:
+        match = UUID_SEGMENT.search((shared.get(k) or {}).get("iri") or "")
+        if match:
+            texts.add(json.dumps(match.group(1)))
+    return keys, texts
 
 
 def _products_using(state, key):

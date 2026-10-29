@@ -88,7 +88,7 @@ class EndToEndTest(unittest.TestCase):
                                                "option": "<attribute_option:matiere:Acier inoxydable IRI>"}])
         self.assertIn({"key": "custom.marque", "shared": "metafield_definition:custom.marque",
                        "body": {"definition": "<metafield_definition:custom.marque IRI>",
-                                "value": "<metaobject:marque:toastine IRI>"}}, out["metafields"])
+                                "value": "<metaobject:marque:toastine UUID>"}}, out["metafields"])
         self.assertEqual(len(out["prices"]), 1)
         self.assertEqual(out["prices"][0]["body"]["tax"], "<tax:FR:20 IRI>")
 

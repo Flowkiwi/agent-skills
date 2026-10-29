@@ -101,13 +101,13 @@ class PhasesTest(unittest.TestCase):
                                    "iri": product_iri("2226"), "error": None, "items": []}], self.products)
         written = self.st["products"]["2226"]["written"]["payload"]
         self.assertEqual([(m["key"], m["body"]["value"]) for m in written["metafields"]],
-                         [("custom.material", "Inox"), ("custom.marque", brand)])
+                         [("custom.material", "Inox"), ("custom.marque", brand.rsplit("/", 1)[1])])
         self.assertEqual((written["product"]["body"]["title"], written["product"]["body"]["category"]),
                          ("Grille-pain", category))
         state.merge(self.st, [{"handle": "2226", "module": "metafields", "status": "created",
                                "iri": product_iri("2226"), "error": None, "items": []}], self.products)
         self.assertEqual([(m["key"], m["body"]["value"]) for m in self.st["products"]["2226"]["written"]["payload"]
-                          ["metafields"]], [("custom.material", "Acier"), ("custom.marque", brand)])
+                          ["metafields"]], [("custom.material", "Acier"), ("custom.marque", brand.rsplit("/", 1)[1])])
 
     def test_module_line_without_snapshot_records_none(self):
         state.merge(self.st, [created_line("2226")])

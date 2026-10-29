@@ -183,11 +183,13 @@ class SharedChangesTest(ConceptTestCase):
             {"key": "custom.marque", "shared": reference,
              "body": {"definition": fake_iri(reference), "value": fake_iri(entry)}}]})
         add_created_product(self.st, "2228", written={"metafields": [{"body": {"value": fake_iri(entry)}}]})
+        add_created_product(self.st, "2226", written={"metafields": [
+            {"body": {"value": fake_iri(entry).rsplit("/", 1)[1]}}]})
         add_created_product(self.st, "2230", written={"note": fake_iri(entry) + "0"})
         self.st["decisions"]["metaobjects"]["definitions"][0]["fields"] = []
         found = plan_shared.changes(self.st)["destructive"]
         self.assertEqual(found, [{"key": "metaobject_definition:marque", "reason": "field nom removed",
-                                  "products": ["2227", "2228"]}])
+                                  "products": ["2226", "2227", "2228"]}])
 
     def test_reused_and_unknown(self):
         state.record_shared(self.st, "metafield_definition:custom.poids_net", fake_iri("x"), "reused", "metafields",

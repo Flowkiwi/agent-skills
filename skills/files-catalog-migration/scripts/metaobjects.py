@@ -82,7 +82,7 @@ def validate(m: dict) -> None:
     if not isinstance(m, dict) or m.get("concept") != "metaobjects":
         raise MappingError("concept must be 'metaobjects', got %r" % (m.get("concept") if isinstance(m, dict) else m,))
     _check_keys(m, KEYS, "mapping")
-    if not isinstance(m.get("reference_validation", True), bool):
+    if not isinstance(m.get("reference_validation", False), bool):
         raise MappingError("reference_validation: true or false")
     definitions = m.get("definitions")
     if not isinstance(definitions, list) or not definitions:
@@ -268,7 +268,7 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
             for handle, entry in links:
                 if entry in handles[kind]:
                     values.setdefault(handle, {})[kind] = entry
-    return {"reference_validation": m.get("reference_validation", True),
+    return {"reference_validation": m.get("reference_validation", False),
             "definitions": [output_definition(d, cleaner) for d in m["definitions"]],
             "entries": entries, "values": values, "warnings": warnings}
 

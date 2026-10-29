@@ -264,6 +264,19 @@ class CompareTest(unittest.TestCase):
         self.assertEqual((before["taxExcludedPrice"]["amount"], after["taxExcludedPrice"]["amount"]),
                          ("20.00", "25.00"))
 
+    def test_snapshot_with_json_numbers_and_entry_iris_is_not_a_change(self):
+        uuid = "00000000-0000-4000-8000-0000000000e1"
+        old, new = self.build("2226"), self.build("2226")
+        old["metafields"] = [{"key": "custom.weight", "body": {"value": 18.4}},
+                             {"key": "custom.count", "body": {"value": 6}},
+                             {"key": "custom.brand", "body": {"value": "/api/metaobjects/" + uuid}}]
+        new["metafields"] = [{"key": "custom.weight", "body": {"value": "18.4"}},
+                             {"key": "custom.count", "body": {"value": "6"}},
+                             {"key": "custom.brand", "body": {"value": uuid}}]
+        self.assertEqual(diff.compare(old, new), {})
+        new["metafields"][0]["body"]["value"] = "18.5"
+        self.assertEqual(diff.compare(old, new), {"metafields": {"changed": {"custom.weight": [18.4, "18.5"]}}})
+
     def test_attributes_and_collections_compare_sorted(self):
         old = self.build("2226")
         new = self.build("2226")

@@ -132,7 +132,38 @@ class MetaobjectsSharedTest(ConceptTestCase):
     def test_product_reference(self):
         out = payload.build(self.products(), self.st, "1004", placeholders=True)["metafields"]
         self.assertEqual(out, [{"key": "custom.marque", "shared": "metafield_definition:custom.marque",
-                                "body": {"definition": "<metafield_definition:custom.marque IRI>", "value": "<metaobject:marque:brioche-co IRI>"}}])
+                                "body": {"definition": "<metafield_definition:custom.marque IRI>",
+                                         "value": "<metaobject:marque:brioche-co UUID>"}}])
+
+    def test_product_reference_is_the_bare_entry_uuid(self):
+        self.record_all_shared(self.st)
+        (entry,) = payload.build(self.products(), self.st, "1004")["metafields"]
+        self.assertEqual(entry["body"], {"definition": fake_iri("metafield_definition:custom.marque"),
+                                         "value": fake_iri("metaobject:marque:brioche-co").rsplit("/", 1)[1]})
+
+    def test_product_reference_needs_an_iri_ending_with_a_uuid(self):
+        self.record_all_shared(self.st)
+        self.st["shared"]["metaobject:marque:brioche-co"]["iri"] = "/api/metaobjects/brioche-co"
+        for placeholders in (False, True):
+            with self.assertRaises(payload.PayloadError):
+                payload.build(self.products(), self.st, "1004", placeholders=placeholders)
+
+    def test_reference_validation_is_false_by_default(self):
+        spec = copy.deepcopy(FIXTURE)
+        del spec["reference_validation"]
+        st = self.state_with_decision("metaobjects", self.extract_with(spec))
+        self.assertIs(st["decisions"]["metaobjects"]["reference_validation"], False)
+        self.assertNotIn("validations", plan_shared.plan(st)[-1]["body"])
+        del st["decisions"]["metaobjects"]["reference_validation"]
+        self.assertNotIn("validations", plan_shared.plan(st)[-1]["body"])
+
+    def test_reference_fields_inside_definitions_keep_their_validation(self):
+        spec = with_pays(FIXTURE)
+        del spec["reference_validation"]
+        st = self.state_with_decision("metaobjects", self.extract_with(spec))
+        marque = next(e for e in plan_shared.plan(st) if e["key"] == "metaobject_definition:marque")
+        self.assertEqual(marque["body"]["fieldDefinitions"][1]["validations"],
+                         [{"name": REFERENCE_VALIDATION, "value": "<metaobject_definition:pays IRI>"}])
 
     def test_product_reference_after_metafields(self):
         state.decide(self.st, "metafields", {"definitions": {"custom.poids": {

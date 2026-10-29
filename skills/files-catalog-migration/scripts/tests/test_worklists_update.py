@@ -250,6 +250,25 @@ class UpdatePassesTest(unittest.TestCase):
         state.merge(self.st, [updated_line("2226")], self.products)
         self.assertEqual(self.lists(), [])
 
+    def test_uuid_placeholders_of_entries_created_since(self):
+        brand = "/api/metaobjects/00000000-0000-4000-8000-0000000000%s"
+        state.record_shared(self.st, "metafield_definition:custom.marque",
+                            "/api/metafield_definitions/00000000-0000-4000-8000-000000000021", "created", "metaobjects")
+        state.record_shared(self.st, "metaobject:marque:toastine", brand % "e1", "created", "metaobjects")
+        decision = {"definitions": [{"type": "marque", "reference": {"metafield": "custom.marque"}}],
+                    "values": {"2226": {"marque": "toastine"}}}
+        state.decide(self.st, "metaobjects", decision, "developer")
+        self.st["products"]["2226"]["written"]["payload"] = payload.build(self.products, self.st, "2226")
+        decision["values"]["2226"]["marque"] = "brioche-co"
+        state.decide(self.st, "metaobjects", decision, "developer")
+        self.diff = checked(diff.diff(self.st, self.products))
+        self.assertEqual(self.diff["changed"]["2226"]["metafields"]["changed"]["custom.marque"],
+                         ["00000000-0000-4000-8000-0000000000e1", "<metaobject:marque:brioche-co UUID>"])
+        state.record_shared(self.st, "metaobject:marque:brioche-co", brand % "e2", "created", "metaobjects")
+        self.assertEqual(self.lists(), [["2226"]])
+        state.merge(self.st, [updated_line("2226")], self.products)
+        self.assertEqual(self.lists(), [])
+
     def move_1006_to_2226(self):
         moved = product(self.products, "2230")["variants"].pop()
         product(self.products, "2226")["variants"].append(dict(moved, option_values=[]))

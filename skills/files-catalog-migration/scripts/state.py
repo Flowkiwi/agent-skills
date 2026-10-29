@@ -253,15 +253,18 @@ def pilot_selection(products, candidates, limit):
     return selected
 
 
-PLACEHOLDER = re.compile(r"^<(.+) IRI>$")
+PLACEHOLDER = re.compile(r"^<(.+) (IRI|UUID)>$")
 
 
 def _resolved(value, shared):
-    """A diff.json value with its `<key IRI>` placeholders replaced by the shared IRIs recorded since."""
+    """A diff.json value with its `<key IRI>` (`<key UUID>`) placeholders replaced by the shared IRIs (their last
+    segment) recorded since."""
     if isinstance(value, str):
         match = PLACEHOLDER.match(value)
         entry = shared.get(match.group(1)) if match else None
-        return entry["iri"] if entry and entry.get("iri") else value
+        if not (entry and entry.get("iri")):
+            return value
+        return entry["iri"] if match.group(2) == "IRI" else entry["iri"].rsplit("/", 1)[-1]
     if isinstance(value, list):
         return [_resolved(v, shared) for v in value]
     if isinstance(value, dict):

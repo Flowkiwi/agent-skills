@@ -77,7 +77,7 @@ From `$S/plan_shared.py <dir>` (`references/create.md` step 3), after the collec
 
 For each entry of the payload `metafields` (`payload.py` keeps the definitions the product has a value for, applies the transform and resolves the definition IRI):
 1. `call_operation list_metafields` on `products/<id>`: a metafield with this definition exists -> record it per the created/reused rule of `references/create.md` `## Per product` (`createdAt` at or after `started_at`, or listed `created` in `state.json`: `created`, so that undo still removes it after a crash; older: `reused`), skip.
-2. Else `call_write_operation create_metafield` `{"path": {"ownerResource": "products", "ownerId": <id>}, "body": <entry body>}`, copied verbatim.
+2. Else `call_write_operation create_metafield` `{"path": {"ownerResource": "products", "ownerId": <id>}, "body": <entry body>}`, copied verbatim. Numbers are strings in the body (`"18.4"`, `"6"`, transform `number`): the MCP only accepts a string `value`.
 3. Record a `metafield` item with module `metafields` (`metaobjects` for a reference metafield, `references/metaobjects.md`), `"ref"` = `namespace.key` and `"shared"` = the entry `shared` (`metafield_definition:<namespace>.<key>`), so that `undo` scope `shared:<key>` can remove the values of one definition.
 
 ## Undo notes

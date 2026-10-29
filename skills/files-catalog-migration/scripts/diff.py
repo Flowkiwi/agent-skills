@@ -57,6 +57,7 @@ Deleted handles appear nowhere else.
 
 import json
 import os
+import re
 import sys
 import tempfile
 from datetime import datetime, timezone
@@ -67,6 +68,7 @@ import verify
 
 PRODUCT_FIELDS = ("title", "description", "tags", "status", "category", "attributes", "collections")
 LIVE = ("created", "archived")
+METAOBJECT_IRI = re.compile(r"^/api/metaobjects" + payload.UUID_SEGMENT.pattern)
 PHASE_DECISIONS = state.PHASE_DECISIONS
 source_fingerprint = state.source_fingerprint
 
@@ -151,26 +153,28 @@ def _variant_changes(old, new):
     return {k: v for k, v in changes.items() if v}
 
 
-def _keyed_changes(old, new, key, value):
+def _keyed_changes(old, new, key, value, same=lambda a, b: a == b):
     before = {key(e): e for e in old or []}
     after = {key(e): e for e in new or []}
     changes = {
         "added": [k for k in after if k not in before],
         "removed": [k for k in before if k not in after],
         "changed": {k: [value(before[k]), value(after[k])] for k in after
-                    if k in before and value(before[k]) != value(after[k])},
+                    if k in before and not same(value(before[k]), value(after[k]))},
     }
     return {k: v for k, v in changes.items() if v}
 
 
 def compare(old, new):
-    """Changes from `old` to `new`, two payload.build outputs; empty when equal."""
+    """Changes from `old` to `new`, two payload.build outputs; empty when equal. Metafield values compare as JSON
+    text: a snapshot written with JSON numbers and entry IRIs equals the string numbers and UUIDs written now."""
     result = {
         "product": _product_changes(old, new),
         "options": _option_changes(old, new),
         "variants": _variant_changes(old, new),
         "metafields": _keyed_changes(old.get("metafields"), new.get("metafields"),
-                                     lambda e: e["key"], lambda e: e["body"].get("value")),
+                                     lambda e: e["key"], lambda e: e["body"].get("value"),
+                                     lambda a, b: _json_text(a) == _json_text(b)),
         "prices": _keyed_changes(old.get("prices"), new.get("prices"),
                                  lambda e: f"{e['sku']}:{e['country']}", lambda e: e["body"]),
     }
@@ -371,13 +375,18 @@ def _numbers(value, nested=False):
 
 
 def _json_text(value):
-    """A metafield value as JSON text: a string holding JSON is parsed first, IRIs as objects become IRIs."""
+    """A metafield value as JSON text: a string holding JSON is parsed first, IRIs as objects become IRIs, a
+    metaobject IRI becomes its UUID (a product reference metafield is written as the bare UUID)."""
     value = _plain(value)
     if isinstance(value, str):
-        try:
-            value = json.loads(value)
-        except ValueError:
-            pass
+        match = METAOBJECT_IRI.match(value)
+        if match:
+            value = match.group(1)
+        else:
+            try:
+                value = json.loads(value)
+            except ValueError:
+                pass
     return json.dumps(_numbers(value), sort_keys=True, ensure_ascii=False)
 
 

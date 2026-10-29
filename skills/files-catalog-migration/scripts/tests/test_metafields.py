@@ -41,7 +41,7 @@ class MetafieldsTest(ConceptTestCase):
         out = payload.build(self.products(), self.state_with_decision("metafields", m), "2226", placeholders=True)["metafields"]
         self.assertEqual(out[0], {"key": "custom.composition", "shared": "metafield_definition:custom.composition",
                                   "body": {"definition": "<metafield_definition:custom.composition IRI>", "value": '["Inox", "argenté"]'}})
-        self.assertEqual(out[1]["body"]["value"], 1.8)
+        self.assertEqual(out[1]["body"]["value"], "1.8")
 
     def test_validation(self):
         for bad in ({"import.key": {"name": "Clé", "type": "json", "value": {"value": "x"}}},
@@ -101,7 +101,7 @@ class MetafieldsTest(ConceptTestCase):
         self.assertEqual(m["values"]["2226"], {"custom.poids": "1.8"})
         self.assertNotIn("not_a_number", codes)
         out = payload.build(self.products(), self.state_with_decision("metafields", m), "2226", placeholders=True)
-        self.assertEqual(out["metafields"][0]["body"]["value"], 1.8)
+        self.assertEqual(out["metafields"][0]["body"]["value"], "1.8")
 
     def test_decimal_comma_is_normalised_in_lists(self):
         m, codes = self.extract_with(self.one("custom.poids", "Poids", "list__number_decimal",
@@ -154,7 +154,7 @@ class MetafieldsTest(ConceptTestCase):
         out = payload.build(self.products(), st, "nokey-0001", placeholders=True)["metafields"]
         self.assertEqual([e["key"] for e in out], ["custom.composition"])
         out = payload.build(self.products(), st, "2228", placeholders=True)["metafields"]
-        self.assertEqual([e["body"]["value"] for e in out], ['["inox", "Crème"]', 1.5])
+        self.assertEqual([e["body"]["value"] for e in out], ['["inox", "Crème"]', "1.5"])
 
     def test_payload_without_values_reads_the_products(self):
         st = self.state_with_decision("metafields", {"definitions": {"custom.material": {
