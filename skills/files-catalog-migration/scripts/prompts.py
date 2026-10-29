@@ -19,6 +19,7 @@ import tempfile
 
 SKILL_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 MODULES = ("taxonomy", "collections", "metafields", "metaobjects", "prices")
+MODULE_STEPS = {"metaobjects": "metafields"}
 PLACEHOLDER = re.compile(r"\{\{([A-Z_]+)\}\}")
 FENCE = re.compile(r"^(\s*)(`{3,})")
 
@@ -145,6 +146,7 @@ def worker_prompt(directory, worker, module=None, update=False, skill=SKILL_DIR)
         name = f"worker-{worker}-update"
     elif module:
         note = create.block("Concept added after creation").replace("<concept>", module)
+        note = note.replace("<step>", MODULE_STEPS.get(module, module))
         parts = [note, created_vs_reused, Reference(skill, f"{module}.md").text("Per product")]
         name = f"worker-{worker}-module-{module}"
     else:

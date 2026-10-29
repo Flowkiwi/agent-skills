@@ -79,7 +79,7 @@ From `$S/plan_shared.py <dir>` (`references/create.md` step 3), in its order aft
 
 The reference metafield is an entry of the payload `metafields` (after the metafields of `references/metafields.md`): `payload.py` resolves the definition IRI and the entry from `shared`: the value is the bare UUID of the entry (the last segment of its IRI, `<metaobject:<type>:<handle> UUID>` with `--dry-run`), as the API answers 422 on the IRI. Same procedure as metafields: `list_metafields` on `products/<id>`, else `create_metafield` with the entry body copied verbatim. Record a `metafield` item with module `metaobjects` (the module of its shared definition in `state.json`), `"ref"` = `namespace.key` and `"shared"` = the entry `shared`. A product without a value for the definition gets no reference.
 
-Module-only mode (metaobjects added to products already created): `$S/state.py worklists <dir> --module metaobjects`, then `$S/payload.py <dir> <handle> --step metafields`, and only the entries whose `shared` key is recorded with module `metaobjects` (the other metafields belong to their own concept).
+Module-only mode (metaobjects added to products already created, on the worklist the main session built for this module): `$S/payload.py <dir> <handle> --step metafields`, and only the entries whose `shared` key is recorded with module `metaobjects` (the other metafields belong to their own concept).
 
 ## Undo notes
 

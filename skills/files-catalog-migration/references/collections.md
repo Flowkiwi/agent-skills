@@ -54,7 +54,7 @@ From `$S/plan_shared.py <dir>` (`references/create.md` step 3), in its order (af
 
 `payload.py` resolves the collection IRIs from the decision and `shared`: never map them by hand.
 - `full` mode (the products are created with this concept): the payload `product.body` already holds `collections: [<iris>]` for the `create_product` call.
-- `module-only` mode (the concept is added to products already created, `state.py worklists <dir> --module collections`): `$S/payload.py <dir> <handle> --step collections` prints `{"handle": "<handle>", "collections": [<iris>]}`; `get_product`, then `update_product` with `collections` = existing + new (send the union: merge-patch replaces the array).
+- `module-only` mode (the concept is added to products already created, on the worklist the main session built for this module): `$S/payload.py <dir> <handle> --step collections` prints `{"handle": "<handle>", "collections": [<iris>]}`; `get_product`, then `update_product` with `collections` = existing + new (send the union: merge-patch replaces the array).
 - Record `{"kind": "collection_link", "iri": "<product iri>#collections", "status": "created", "module": "collections"}`. Products with no collection get no link item.
 
 ## Undo notes

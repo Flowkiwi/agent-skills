@@ -109,7 +109,7 @@ Record each with module `taxonomy` (`state.py shared`, or `--file` for a batch).
 
 `payload.py` resolves the category and attribute IRIs from the decision and `shared`: never map them by hand.
 - `full` mode (the products are created with this concept): the payload `product.body` already holds `category` and `attributes` (`{"definition", "option"}` for list, `{"definition", "value"}` for string). Only definitions available on the product's category (or its ancestors) are accepted.
-- `module-only` mode (the concept is added to products already created, `state.py worklists <dir> --module taxonomy`): `$S/payload.py <dir> <handle> --step taxonomy`, `get_product`, then `update_product` with that `category` and `attributes` (send the full attributes array: merge-patch replaces it).
+- `module-only` mode (the concept is added to products already created, on the worklist the main session built for this module): `$S/payload.py <dir> <handle> --step taxonomy`, `get_product`, then `update_product` with that `category` and `attributes` (send the full attributes array: merge-patch replaces it).
 - Record `{"kind": "taxonomy_link", "iri": "<product iri>#taxonomy", "status": "created", "module": "taxonomy"}` when the product got a category or attributes.
 
 ## Undo notes

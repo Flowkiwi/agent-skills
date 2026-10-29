@@ -86,13 +86,29 @@ class PromptsTest(unittest.TestCase):
         self.assertNotIn("<concept>", text)
         self.assertIn("payload.py %s <handle> --step taxonomy" % self.dir, text)
         self.assertLess(text.index("Module-only run"), text.index("**Created vs reused.**"))
-        self.assertLess(text.index("**Created vs reused.**"), text.index("--step taxonomy"))
+        self.assertLess(text.index("**Created vs reused.**"), text.rindex("--step taxonomy"))
         self.assertNotIn("13. **Result**", text)
 
     def test_module_only_metaobjects(self):
         _, text = self.generate("worker", "--worker", "1", "--module", "metaobjects")
         self.assertIn("Module-only run for the concept metaobjects:", text)
-        self.assertIn("--step metafields", text)
+        self.assertIn("payload.py %s <handle> --step metafields, never without --step" % self.dir, text)
+        self.assertNotIn("<step>", text)
+
+    def test_module_only_overrides_the_base_payload_rules(self):
+        for module in prompts.MODULES:
+            _, text = self.generate("worker", "--worker", "1", "--module", module)
+            step = "metafields" if module == "metaobjects" else module
+            self.assertIn("It replaces two rules above. The payload command: build every MCP argument from "
+                          "python3 %s/scripts/payload.py %s <handle> --step %s, never without --step."
+                          % (SKILL_DIR, self.dir, step), text)
+            self.assertIn("Never modify or delete: on the products of your worklist (created by this migration), "
+                          "you only write the fields and items that payload prints", text)
+
+    def test_module_only_never_rebuilds_worklists(self):
+        for module in prompts.MODULES:
+            _, text = self.generate("worker", "--worker", "1", "--module", module)
+            self.assertNotIn("state.py worklists", text, module)
 
     def test_update(self):
         path, text = self.generate("worker", "--worker", "1", "--update")
@@ -105,6 +121,8 @@ class PromptsTest(unittest.TestCase):
         self.assertLess(text.index("Update run"), text.index("**Created vs reused.**"))
         self.assertLess(text.index("**Created vs reused.**"), text.index("**Plan.**"))
         self.assertNotIn("**Worklists.**", text)
+        self.assertNotIn("state.py worklists", text)
+        self.assertIn("It replaces six rules above.", text)
 
     def test_shared(self):
         path, text = self.generate("shared")
@@ -113,6 +131,7 @@ class PromptsTest(unittest.TestCase):
         self.assertIn("python3 %s/scripts/plan_shared.py %s --ready" % (SKILL_DIR, self.dir), text)
         self.assertIn(os.path.join(self.dir, "tmp", "shared") + "/shared.json", text)
         self.assertIn("not tried again", text)
+        self.assertIn("(`mkdir -p %s` first)" % os.path.join(self.dir, "tmp", "shared"), text)
 
     def test_python_command(self):
         _, text = self.generate("worker", "--worker", "1", "--python", "py -3")
