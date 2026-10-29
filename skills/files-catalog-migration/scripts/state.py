@@ -264,7 +264,11 @@ def _resolved(value, shared):
         entry = shared.get(match.group(1)) if match else None
         if not (entry and entry.get("iri")):
             return value
-        return entry["iri"] if match.group(2) == "IRI" else entry["iri"].rsplit("/", 1)[-1]
+        if match.group(2) == "IRI":
+            return entry["iri"]
+        import payload  # function-level: payload imports state
+        uuid = payload.UUID_SEGMENT.search(entry["iri"])
+        return uuid.group(1) if uuid else value
     if isinstance(value, list):
         return [_resolved(v, shared) for v in value]
     if isinstance(value, dict):

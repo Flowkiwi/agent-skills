@@ -277,6 +277,14 @@ class CompareTest(unittest.TestCase):
         new["metafields"][0]["body"]["value"] = "18.5"
         self.assertEqual(diff.compare(old, new), {"metafields": {"changed": {"custom.weight": [18.4, "18.5"]}}})
 
+    def test_another_spelling_of_a_text_value_is_a_change(self):
+        for before, after in (("10", "10.0"), ("abc", '"abc"'), ("1.50", "1.5"), ('["1", "2"]', '["1.0", "2"]'),
+                              (["1", "2"], ["1.0", "2"]), (True, "true"), (18.4, "18.40")):
+            old, new = self.build("2226"), self.build("2226")
+            old["metafields"] = [{"key": "custom.note", "body": {"value": before}}]
+            new["metafields"] = [{"key": "custom.note", "body": {"value": after}}]
+            self.assertEqual(diff.compare(old, new), {"metafields": {"changed": {"custom.note": [before, after]}}})
+
     def test_attributes_and_collections_compare_sorted(self):
         old = self.build("2226")
         new = self.build("2226")

@@ -165,16 +165,26 @@ def _keyed_changes(old, new, key, value, same=lambda a, b: a == b):
     return {k: v for k, v in changes.items() if v}
 
 
+def _same_metafield_value(old, new):
+    """Equal values, or the old formats of a snapshot written before the string numbers and the entry UUIDs: a JSON
+    number and its string, a metaobject IRI and its UUID."""
+    if old == new:
+        return True
+    if isinstance(old, (int, float)) and not isinstance(old, bool) and isinstance(new, str):
+        return payload._number_text(old) == new
+    match = METAOBJECT_IRI.match(old) if isinstance(old, str) else None
+    return bool(match) and match.group(1) == new
+
+
 def compare(old, new):
-    """Changes from `old` to `new`, two payload.build outputs; empty when equal. Metafield values compare as JSON
-    text: a snapshot written with JSON numbers and entry IRIs equals the string numbers and UUIDs written now."""
+    """Changes from `old` to `new`, two payload.build outputs; empty when equal (`_same_metafield_value` for the
+    metafield values)."""
     result = {
         "product": _product_changes(old, new),
         "options": _option_changes(old, new),
         "variants": _variant_changes(old, new),
         "metafields": _keyed_changes(old.get("metafields"), new.get("metafields"),
-                                     lambda e: e["key"], lambda e: e["body"].get("value"),
-                                     lambda a, b: _json_text(a) == _json_text(b)),
+                                     lambda e: e["key"], lambda e: e["body"].get("value"), _same_metafield_value),
         "prices": _keyed_changes(old.get("prices"), new.get("prices"),
                                  lambda e: f"{e['sku']}:{e['country']}", lambda e: e["body"]),
     }
