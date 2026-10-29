@@ -1,7 +1,8 @@
 """Bookkeeping for a files -> Flowkiwi migration workspace.
 
 Usage:
-  python3 state.py init <dir> --client <slug> --mcp-url <url>
+  python3 state.py init <dir> --client <slug> --mcp-url <url> --tools-prefix <prefix>
+  python3 state.py set-mcp <dir> --tools-prefix <prefix> [--mcp-url <url>]
   python3 state.py sync <dir>
   python3 state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module> [--spec-json '<json>']
   python3 state.py shared <dir> --file <shared.json>   # [{"key", "iri", "status", "module", "spec"?}, ...]
@@ -51,9 +52,17 @@ def _now():
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
-def init(client, mcp_url, products):
+def check_tools_prefix(prefix):
+    """The prefix of the Flowkiwi MCP tool names the workers must use (e.g. mcp__flowkiwi__)."""
+    if not isinstance(prefix, str) or not prefix or prefix != prefix.strip() or any(c.isspace() for c in prefix):
+        raise ValueError(f"invalid tools prefix {prefix!r}: the start of the Flowkiwi MCP tool names, "
+                         "e.g. mcp__flowkiwi__, without spaces")
+    return prefix
+
+
+def init(client, mcp_url, products, tools_prefix=None):
     started_at = _now()
-    return {
+    state = {
         "version": 1,
         "source": "files",
         "phase": 1,
@@ -66,6 +75,17 @@ def init(client, mcp_url, products):
         "shared": {},
         "products": {p["handle"]: _new_product() for p in products["products"]},
     }
+    if tools_prefix is not None:
+        state["tools_prefix"] = check_tools_prefix(tools_prefix)
+    return state
+
+
+def set_mcp(state, tools_prefix, mcp_url=None):
+    """Record the Flowkiwi MCP server the workers use: its tools prefix and, when given, its URL."""
+    state["tools_prefix"] = check_tools_prefix(tools_prefix)
+    if mcp_url:
+        state["mcp_url"] = mcp_url
+    return state
 
 
 def _has_created_items(product):
@@ -1044,6 +1064,12 @@ def main(argv):
     p.add_argument("dir")
     p.add_argument("--client", required=True)
     p.add_argument("--mcp-url", required=True)
+    p.add_argument("--tools-prefix", help="start of the Flowkiwi MCP tool names, e.g. mcp__flowkiwi__")
+
+    p = sub.add_parser("set-mcp")
+    p.add_argument("dir")
+    p.add_argument("--tools-prefix", required=True)
+    p.add_argument("--mcp-url")
 
     sub.add_parser("sync").add_argument("dir")
 
@@ -1121,14 +1147,26 @@ def main(argv):
         if os.path.exists(state_path):
             print(f"error: {state_path} already exists, resume instead", file=sys.stderr)
             return 1
-        state = init(args.client, args.mcp_url, _read_json(os.path.join(args.dir, "products.json")))
+        try:
+            state = init(args.client, args.mcp_url, _read_json(os.path.join(args.dir, "products.json")),
+                         args.tools_prefix)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
         _write_json(state_path, state)
         print(f"{len(state['products'])} products pending")
         return 0
 
     state = _read_json(state_path)
 
-    if args.command == "sync":
+    if args.command == "set-mcp":
+        try:
+            set_mcp(state, args.tools_prefix, args.mcp_url)
+        except ValueError as error:
+            print(f"error: {error}", file=sys.stderr)
+            return 1
+        print(f"tools prefix {state['tools_prefix']}, server {state.get('mcp_url')}")
+    elif args.command == "sync":
         before = len(state["products"])
         sync_products(state, _read_json(os.path.join(args.dir, "products.json")))
         print(f"{len(state['products']) - before} new products added")

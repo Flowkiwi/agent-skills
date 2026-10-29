@@ -111,6 +111,7 @@ After a change that skips products, run `state.py sync <dir>`.
 ```json
 {
   "version": 1, "source": "files", "phase": 2, "client": "acme", "mcp_url": "https://...",
+  "tools_prefix": "mcp__flowkiwi__",
   "started_at": "2026-10-27T10:00:00Z",
   "phases": [{"n": 1, "started_at": "2026-10-27T10:00:00Z"}, {"n": 2, "started_at": "2026-11-12T09:00:00Z"}],
   "decisions": {"data_language": "fr", "status_mode": "draft", "codes": {"prefix": "2", "next_start": 6, "sku_pattern": "{handle}-{index}"}},
@@ -126,6 +127,7 @@ After a change that skips products, run `state.py sync <dir>`.
 }
 ```
 
+- `mcp_url` and `tools_prefix`: the Flowkiwi MCP server of the tenant, checked at Start (SKILL.md "Start or resume"), and the start of its tool names in the agent (e.g. `mcp__flowkiwi__`). `prompts.py` writes them in every worker prompt (workers use only those tools) and exits 1 while one is missing, printing the `state.py set-mcp` to run; a workspace started before they were recorded needs it once.
 - `phase`: the current migration phase (1 for the first run), `phases` when each one started. `state.py phase <dir> --start` starts the next one (prints its number) and refuses while a result file is not merged (exit 1, `run state.py merge first`); `state.py phase <dir>` prints the current one. A decision belongs to the phase it was recorded in (`decision_meta.<key>.phase`): the phase decisions (`force_update`, `removed_action`, `confirmed_changes`, `confirmed_rekey`) also carry `{"phase": <n>}` in their value and only count when both equal the current phase.
 - `decision_meta.<key>`: `origin` (`developer`, `agent` or `client`), `reason` (in the data language), `phase` and `at`, written by `state.py decide`.
 - Product status: `pending`, `created`, `failed`, `deleted`, `archived` (archived in Flowkiwi by a later phase), `skipped` (handle no longer in `products.json`, set by `state.py sync` on a `pending` product or a `failed` one without any `created` item; back to `pending` if it reappears). `deleted` and `archived` products are never assigned to a creation worker nor counted as to create by `dryrun.py`.
@@ -172,7 +174,8 @@ $S/catalog.py --check <dir>/products.json [--state <dir>/state.json] # exit 1 on
 $S/codes.py preview <dir>/products.json --prefix 2 --start 1 [--sku-pattern "{handle}-{index}"] [--previous <old products.json>]
 $S/codes.py fill <dir>/products.json --prefix 2 --start 1 [--sku-pattern "{handle}-{index}"] [--previous <old products.json>]
 $S/codes.py fix <dir>/products.json <dir>/fixes.json                 # one-off check: extract.py applies fixes itself
-$S/state.py init <dir> --client <slug> --mcp-url <url>
+$S/state.py init <dir> --client <slug> --mcp-url <url> --tools-prefix <prefix>
+$S/state.py set-mcp <dir> --tools-prefix <prefix> [--mcp-url <url>]   # record the MCP server of an older workspace
 $S/state.py sync <dir>                                               # new or skipped handles from products.json
 $S/state.py decide <dir> --key <name> --value-json '<json>' | --value-file <file.json> --origin developer|agent|client [--reason "<text>"]
 $S/state.py shared <dir> --key <kind:name> --iri <iri> --status created|reused --module <module> [--spec-json '<json>']
@@ -181,6 +184,7 @@ $S/state.py worklists <dir> --workers 4 [--pilot [--limit 5]] [--handles a,b,c] 
 $S/state.py worklists <dir> --workers 4 --update [--handles a,b,c] [--retry-failed]   # a later phase: next pass of diff.json
 $S/prompts.py <dir> worker --worker <n> [--module <concept> | --update] [--python <command>]   # writes tmp/prompts/<name>.md, prints its path
 $S/prompts.py <dir> shared [--python <command>]                     # the shared elements worker prompt, tmp/prompts/shared.md
+$S/prompts.py <dir> rules                                            # the MCP rules block alone, tmp/prompts/mcp-rules.md
 $S/state.py result <dir>/results/worker-1.jsonl --json-file <dir>/tmp/worker-1/line.json   # or --json '<line>', --json - (stdin)
 $S/state.py merge <dir>                                              # also records the written snapshots
 $S/state.py phase <dir> [--start]                                    # print the current phase, or start the next one

@@ -489,6 +489,43 @@ class StateCliTest(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
+    def read_state(self):
+        with open(os.path.join(self.dir, "state.json"), encoding="utf-8") as f:
+            return json.load(f)
+
+    def test_init_records_the_tools_prefix(self):
+        result = run_cli("init", self.dir, "--client", "acme", "--mcp-url", "https://uat/api/mcp",
+                         "--tools-prefix", "mcp__claude_ai_Flowkiwi_-_UAT-1__")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        st = self.read_state()
+        self.assertEqual(st["tools_prefix"], "mcp__claude_ai_Flowkiwi_-_UAT-1__")
+        self.assertEqual(st["mcp_url"], "https://uat/api/mcp")
+
+    def test_set_mcp_records_the_prefix_of_an_old_workspace(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "https://uat/api/mcp")
+        self.assertNotIn("tools_prefix", self.read_state())
+        result = run_cli("set-mcp", self.dir, "--tools-prefix", "mcp__flowkiwi__")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        st = self.read_state()
+        self.assertEqual((st["tools_prefix"], st["mcp_url"]), ("mcp__flowkiwi__", "https://uat/api/mcp"))
+        result = run_cli("set-mcp", self.dir, "--tools-prefix", "mcp__prod__", "--mcp-url", "https://prod/api/mcp")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        st = self.read_state()
+        self.assertEqual((st["tools_prefix"], st["mcp_url"]), ("mcp__prod__", "https://prod/api/mcp"))
+
+    def test_set_mcp_refuses_a_blank_prefix(self):
+        run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")
+        for prefix in ("", " ", "mcp flowkiwi"):
+            result = run_cli("set-mcp", self.dir, "--tools-prefix", prefix)
+            self.assertEqual(result.returncode, 1, prefix)
+            self.assertIn("tools prefix", result.stderr)
+        self.assertNotIn("tools_prefix", self.read_state())
+        os.remove(os.path.join(self.dir, "state.json"))
+        result = run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u", "--tools-prefix", " ")
+        self.assertEqual(result.returncode, 1)
+        self.assertIn("tools prefix", result.stderr)
+        self.assertFalse(os.path.exists(os.path.join(self.dir, "state.json")))
+
     def test_init_refuses_overwrite(self):
         self.assertEqual(run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u").returncode, 0)
         second = run_cli("init", self.dir, "--client", "acme", "--mcp-url", "u")

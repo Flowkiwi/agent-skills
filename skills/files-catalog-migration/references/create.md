@@ -49,11 +49,12 @@ The worker runs this for each handle of its worklist, in order. Every item creat
 
 ## Worker MCP rules
 
-Every worker prompt includes this block as is: `prompts.py` puts it in place of `{{MCP_RULES}}` in the product workers (`## Worker prompt template`, module-only and update runs included, `references/phases.md` `## Update worker`) and the shared elements worker; the prompt of the read-only snapshot worker (`references/phases.md` step 8) includes it too. In sequential mode, follow it yourself too.
+Every worker prompt includes this block: `prompts.py` fills `{{TOOLS_PREFIX}}` and `{{MCP_URL}}` with the `tools_prefix` and `mcp_url` of `state.json` (the Flowkiwi MCP server checked at Start, SKILL.md "Start or resume") and puts it in place of `{{MCP_RULES}}` in the product workers (`## Worker prompt template`, module-only and update runs included, `references/phases.md` `## Update worker`) and the shared elements worker; the prompt of the read-only snapshot worker (`references/phases.md` step 8) includes it too, written by `$S/prompts.py <dir> rules` to `<dir>/tmp/prompts/mcp-rules.md`. `prompts.py` exits 1 while `state.json` has no `tools_prefix` or `mcp_url` (a workspace started before they were recorded): run the `$S/state.py set-mcp <dir> --tools-prefix <prefix> [--mcp-url <url>]` it prints, with the prefix of the tools that answered at Start, never a guessed one. In sequential mode, follow it yourself too, with the same tools only.
 
 ````
 MCP rules:
-- Tools: the Flowkiwi MCP tools may be deferred: load them first (ToolSearch in Claude Code, with the client prefix such as `mcp__flowkiwi__`; your client's tool search otherwise) before concluding a tool is missing. Run describe_operation before the first call of each operation run through call_operation or call_write_operation (path, query and body arguments).
+- Server: use only the tools whose name starts with `{{TOOLS_PREFIX}}` (server {{MCP_URL}}), the Flowkiwi tenant of this migration. If no such tool is available, or several Flowkiwi servers match, stop and report it: never pick another server or prefix.
+- Tools: the Flowkiwi MCP tools may be deferred: load them first (ToolSearch in Claude Code, with `{{TOOLS_PREFIX}}`; your client's tool search otherwise) before concluding a tool is missing. Run describe_operation before the first call of each operation run through call_operation or call_write_operation (path, query and body arguments).
 - Errors: a timeout, an HTTP 5xx and `rate limit exceeded` (HTTP 429) are handled alike: wait with `sleep 5`, then `sleep 15`, then `sleep 45` between attempts, and look up before any retry of a write (the first attempt may have gone through). Still failing after that: fail the item (the product, or the shared entry) with the error and go on.
 - Schema refusal: a schema or validation refusal (HTTP 400 or 422, "invalid", "expected string", ...) on a payload printed by a script fails the item with the error message. Never change a value, a type or a format to make it pass: the script output is the decision, the developer fixes the mapping.
 ````
@@ -63,7 +64,7 @@ MCP rules:
 Never fill it by hand: `$S/prompts.py <dir> worker --worker <n>` writes the prompt of worker `n` to `<dir>/tmp/prompts/worker-<n>.md` and prints that path; pass the file content verbatim (SKILL.md "Running workers"). In parallel mode, send one prompt per worklist to a subagent, all at once. In sequential mode, generate it for worker 1 and follow it yourself.
 
 ````
-You are a worker of a files -> Flowkiwi catalog migration. You create products in Flowkiwi through the Flowkiwi MCP tools (dedicated tools, or search_operations / describe_operation / call_operation / call_write_operation; your client may prefix their names, e.g. `mcp__flowkiwi__list_products`, and may need you to load them first). The developer already approved the mapping: do not ask questions, do not change any decision.
+You are a worker of a files -> Flowkiwi catalog migration. You create products in Flowkiwi through the Flowkiwi MCP tools (dedicated tools, or search_operations / describe_operation / call_operation / call_write_operation; their names start with `{{TOOLS_PREFIX}}`, e.g. `{{TOOLS_PREFIX}}list_products`, and your client may need you to load them first). The developer already approved the mapping: do not ask questions, do not change any decision.
 
 Inputs:
 - Workspace: {{DIR}} (`<dir>` below)
@@ -95,7 +96,7 @@ Procedure:
 {{PER_PRODUCT}}
 ````
 
-For maintainers: `prompts.py` reads this block at each run and fills `{{DIR}}` (the workspace), `{{WORKLIST_PATH}}` (`<dir>/worklists/worker-<n>.json`, as written by `state.py worklists`), `{{PRODUCTS_PATH}}` (`<dir>/products.json`), `{{STATE_PATH}}` (`<dir>/state.json`), `{{MIGRATION_STARTED_AT}}` (the full `started_at` of `state.json`), `{{RESULT_PATH}}` (`<dir>/results/worker-<n>.jsonl`), `{{WORK_DIR}}` (`<dir>/tmp/worker-<n>`), `{{SKILL}}` (the skill path), `{{MCP_RULES}}` (the block of `## Worker MCP rules` above, as is) and `{{PER_PRODUCT}}`: the `## Map` heading and fields table of `references/products.md` followed by the `## Per product` section above, with `$S`, `$SKILL` and `<dir>` replaced by real paths. It fails on a missing worklist, a heading not found or a placeholder left. Workers only see this prompt: anything they need to compute a payload must be in it.
+For maintainers: `prompts.py` reads this block at each run and fills `{{DIR}}` (the workspace), `{{WORKLIST_PATH}}` (`<dir>/worklists/worker-<n>.json`, as written by `state.py worklists`), `{{PRODUCTS_PATH}}` (`<dir>/products.json`), `{{STATE_PATH}}` (`<dir>/state.json`), `{{MIGRATION_STARTED_AT}}` (the full `started_at` of `state.json`), `{{RESULT_PATH}}` (`<dir>/results/worker-<n>.jsonl`), `{{WORK_DIR}}` (`<dir>/tmp/worker-<n>`), `{{SKILL}}` (the skill path), `{{TOOLS_PREFIX}}` (the `tools_prefix` of `state.json`), `{{MCP_RULES}}` (the block of `## Worker MCP rules` above, its server filled in) and `{{PER_PRODUCT}}`: the `## Map` heading and fields table of `references/products.md` followed by the `## Per product` section above, with `$S`, `$SKILL` and `<dir>` replaced by real paths. It fails on a missing worklist, a worklist whose products do not have the status of the run (pending or failed here, created for a module-only run, created or archived for an update run: run `state.py worklists` again with the same options), a missing `tools_prefix` or `mcp_url`, a heading not found or a placeholder left. Workers only see this prompt: anything they need to compute a payload must be in it.
 
 ## Concept added after creation
 
@@ -122,7 +123,7 @@ A product with nothing to send for the concept gets no item, so it is listed aga
 The shared elements can be created in the main session, or by one dedicated worker (never several: the elements of the concepts depend on each other). Its prompt: `$S/prompts.py <dir> shared` writes it to `<dir>/tmp/prompts/shared.md` and prints that path; pass the file content verbatim, never fill the template below by hand.
 
 ````
-You create the shared elements of a files -> Flowkiwi catalog migration through the Flowkiwi MCP tools (search_operations / describe_operation / call_operation / call_write_operation; your client may prefix their names). The developer already approved the plan: do not ask questions, do not change anything in it.
+You create the shared elements of a files -> Flowkiwi catalog migration through the Flowkiwi MCP tools whose names start with `{{TOOLS_PREFIX}}` (search_operations / describe_operation / call_operation / call_write_operation). The developer already approved the plan: do not ask questions, do not change anything in it.
 
 Loop until the plan is empty:
 1. python3 {{SKILL}}/scripts/plan_shared.py {{DIR}} --ready
@@ -133,7 +134,7 @@ Stop the loop when an iteration records nothing new (every remaining entry faile
 Write temporary files only in {{WORK_DIR}}. Never modify or delete tenant items. When done, reply with 3 lines only: created count, reused count, failed keys with a short reason.
 ````
 
-For maintainers: `prompts.py` fills `{{SKILL}}` (the skill path), `{{DIR}}` (the workspace), `{{WORK_DIR}}` (`<dir>/tmp/shared`) and `{{MCP_RULES}}` (the block of `## Worker MCP rules`, as is).
+For maintainers: `prompts.py` fills `{{SKILL}}` (the skill path), `{{DIR}}` (the workspace), `{{WORK_DIR}}` (`<dir>/tmp/shared`), `{{TOOLS_PREFIX}}` (the `tools_prefix` of `state.json`) and `{{MCP_RULES}}` (the block of `## Worker MCP rules`, its server filled in).
 
 ## Verify
 

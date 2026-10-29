@@ -13,6 +13,7 @@ from phase_helpers import (created_line, make_products, make_state, read_json, r
                            write_workspace)
 
 SKILL_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+PREFIX = "mcp__claude_ai_Flowkiwi_-_UAT-1__"
 
 
 class PromptsTest(unittest.TestCase):
@@ -21,9 +22,29 @@ class PromptsTest(unittest.TestCase):
         self.addCleanup(tmp.cleanup)
         self.dir = os.path.realpath(tmp.name)
         self.state = make_state(make_products())
+        self.state["tools_prefix"] = PREFIX
         write_workspace(self.dir, make_products(), self.state)
         result = run_cli("worklists", self.dir, "--workers", "2")
         self.assertEqual(result.returncode, 0, result.stderr)
+
+    def edit_state(self, change):
+        path = os.path.join(self.dir, "state.json")
+        st = read_json(path)
+        change(st)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(st, f)
+
+    def set_status(self, status, handles=None):
+        def change(st):
+            for handle, product in st["products"].items():
+                if handles is None or handle in handles:
+                    product["status"] = status
+        self.edit_state(change)
+
+    def fails(self, *args):
+        result = run_cli(self.dir, *args, script="prompts.py")
+        self.assertEqual(result.returncode, 1, result.stdout)
+        return result.stderr
 
     def generate(self, *args):
         result = run_cli(self.dir, *args, script="prompts.py")
@@ -36,7 +57,10 @@ class PromptsTest(unittest.TestCase):
         self.assertNotIn("{{", text)
         self.assertNotIn("$SKILL", text)
         self.assertNotIn("$S/", text)
-        self.assertIn("MCP rules:\n- Tools:", text)
+        self.assertIn("MCP rules:\n- Server:", text)
+        self.assertIn("- Tools:", text)
+        self.assertIn("use only the tools whose name starts with `%s` (server https://mcp.example.com)" % PREFIX, text)
+        self.assertIn("If no such tool is available, or several Flowkiwi servers match, stop and report it", text)
         self.assertIn("- Schema refusal:", text)
         self.assertIn(os.path.join(SKILL_DIR, "scripts"), text)
 
@@ -78,6 +102,7 @@ class PromptsTest(unittest.TestCase):
         self.assertIn(result_path, text)
 
     def test_module_only(self):
+        self.set_status("created")
         path, text = self.generate("worker", "--worker", "1", "--module", "taxonomy")
         self.assertEqual(path, os.path.join(self.dir, "tmp", "prompts", "worker-1-module-taxonomy.md"))
         self.assert_product_worker(text, 1)
@@ -90,12 +115,14 @@ class PromptsTest(unittest.TestCase):
         self.assertNotIn("13. **Result**", text)
 
     def test_module_only_metaobjects(self):
+        self.set_status("created")
         _, text = self.generate("worker", "--worker", "1", "--module", "metaobjects")
         self.assertIn("Module-only run for the concept metaobjects:", text)
         self.assertIn("payload.py %s <handle> --step metafields, never without --step" % self.dir, text)
         self.assertNotIn("<step>", text)
 
     def test_module_only_overrides_the_base_payload_rules(self):
+        self.set_status("created")
         for module in prompts.MODULES:
             _, text = self.generate("worker", "--worker", "1", "--module", module)
             step = "metafields" if module == "metaobjects" else module
@@ -106,11 +133,13 @@ class PromptsTest(unittest.TestCase):
                           "you only write the fields and items that payload prints", text)
 
     def test_module_only_never_rebuilds_worklists(self):
+        self.set_status("created")
         for module in prompts.MODULES:
             _, text = self.generate("worker", "--worker", "1", "--module", module)
             self.assertNotIn("state.py worklists", text, module)
 
     def test_update(self):
+        self.set_status("created")
         path, text = self.generate("worker", "--worker", "1", "--update")
         self.assertEqual(path, os.path.join(self.dir, "tmp", "prompts", "worker-1-update.md"))
         self.assert_product_worker(text, 1)
@@ -137,6 +166,57 @@ class PromptsTest(unittest.TestCase):
         _, text = self.generate("worker", "--worker", "1", "--python", "py -3")
         self.assertIn("py -3 %s/scripts/payload.py" % SKILL_DIR, text)
         self.assertNotIn("python3 ", text)
+
+    def test_missing_tools_prefix_or_server(self):
+        self.edit_state(lambda st: st.pop("tools_prefix"))
+        command = "python3 %s/scripts/state.py set-mcp %s --tools-prefix <prefix>" % (SKILL_DIR, self.dir)
+        for args in (("worker", "--worker", "1"), ("shared",), ("rules",)):
+            stderr = self.fails(*args)
+            self.assertIn("no tools_prefix", stderr)
+            self.assertIn(command, stderr)
+        self.edit_state(lambda st: st.update(tools_prefix=PREFIX, mcp_url=None))
+        stderr = self.fails("shared")
+        self.assertIn("no mcp_url", stderr)
+        self.assertIn(command + " --mcp-url <url>", stderr)
+        self.assertFalse(os.path.isdir(os.path.join(self.dir, "tmp", "prompts")))
+
+    def test_rules(self):
+        path, text = self.generate("rules")
+        self.assertEqual(path, os.path.join(self.dir, "tmp", "prompts", "mcp-rules.md"))
+        self.assertTrue(text.startswith("MCP rules:\n- Server:"))
+        self.assertIn("starts with `%s`" % PREFIX, text)
+        self.assertNotIn("{{", text)
+
+    def test_tool_names_in_the_intro_use_the_prefix(self):
+        _, text = self.generate("worker", "--worker", "1")
+        self.assertIn("`%slist_products`" % PREFIX, text)
+        _, text = self.generate("shared")
+        self.assertIn("`%s`" % PREFIX, text.split("\n", 1)[0])
+
+    def test_worker_refuses_a_worklist_already_created(self):
+        handle = read_json(os.path.join(self.dir, "worklists", "worker-1.json"))[0]
+        self.set_status("created", [handle])
+        stderr = self.fails("worker", "--worker", "1")
+        self.assertIn("worklists/worker-1.json: %s is created, not pending or failed" % handle, stderr)
+        self.assertIn("state.py worklists", stderr)
+        self.set_status("failed", [handle])
+        self.generate("worker", "--worker", "1")
+
+    def test_module_and_update_refuse_a_worklist_not_created(self):
+        handle = read_json(os.path.join(self.dir, "worklists", "worker-1.json"))[0]
+        stderr = self.fails("worker", "--worker", "1", "--module", "taxonomy")
+        self.assertIn("worklists/worker-1.json: %s is pending, not created" % handle, stderr)
+        self.assertIn("state.py worklists %s --workers <n> --module taxonomy" % self.dir, stderr)
+        stderr = self.fails("worker", "--worker", "1", "--update")
+        self.assertIn("worklists/worker-1.json: %s is pending, not created or archived" % handle, stderr)
+        self.assertIn("state.py worklists %s --workers <n> --update" % self.dir, stderr)
+        self.set_status("archived")
+        self.fails("worker", "--worker", "1", "--module", "taxonomy")
+        self.generate("worker", "--worker", "1", "--update")
+
+    def test_unknown_handle_in_worklist(self):
+        self.edit_state(lambda st: st["products"].clear())
+        self.assertIn("is not in", self.fails("worker", "--worker", "1"))
 
     def test_missing_worklist(self):
         result = run_cli(self.dir, "worker", "--worker", "9", script="prompts.py")

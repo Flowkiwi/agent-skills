@@ -3,17 +3,22 @@
 Usage:
   python3 prompts.py <dir> worker --worker <n> [--module <concept> | --update] [--python <command>]
   python3 prompts.py <dir> shared [--python <command>]
+  python3 prompts.py <dir> rules        # the MCP rules block alone, for a worker prompt written by hand
 
 The templates live in references/create.md and references/phases.md (single source of truth): this script reads
 the sections by their `##` heading, takes the fenced template blocks, fills the `{{...}}` placeholders with the
-real paths and state values, and writes the prompt to <dir>/tmp/prompts/<name>.md, printing its path.
-Exit 1 when the worklist is missing, a section or block is not found, or a placeholder is left unfilled.
+real paths and state values (the Flowkiwi MCP server: `tools_prefix` and `mcp_url` of state.json), and writes the
+prompt to <dir>/tmp/prompts/<name>.md, printing its path.
+Exit 1 when the worklist is missing or does not fit the mode (a product worker takes pending or failed products, a
+module-only run created ones, an update run created or archived ones), when state.json has no tools_prefix or
+mcp_url (record them with state.py set-mcp), a section or block is not found, or a placeholder is left unfilled.
 """
 
 import argparse
 import json
 import os
 import re
+import shlex
 import sys
 import tempfile
 
@@ -118,16 +123,59 @@ def localized(text, skill, directory):
     return text.replace("<dir>", directory)
 
 
-def _started_at(directory):
-    path = os.path.join(directory, "state.json")
+def _read_json(path):
     try:
         with open(path, encoding="utf-8") as f:
-            started_at = json.load(f).get("started_at")
+            return json.load(f)
     except (OSError, ValueError) as error:
         raise PromptError(f"cannot read {path}: {error}")
-    if not started_at:
+
+
+def _state(directory):
+    path = os.path.join(directory, "state.json")
+    state = _read_json(path)
+    if not isinstance(state, dict) or not state.get("started_at"):
         raise PromptError(f"{path} has no started_at: run state.py init first")
-    return started_at
+    return state
+
+
+def _server(directory, state, skill):
+    """{"TOOLS_PREFIX", "MCP_URL"} of state.json: the only Flowkiwi MCP server the workers may use."""
+    command = f"python3 {skill}/scripts/state.py set-mcp {shlex.quote(directory)} --tools-prefix <prefix>"
+    path = os.path.join(directory, "state.json")
+    if not state.get("tools_prefix"):
+        raise PromptError(f"{path} has no tools_prefix (the start of the Flowkiwi MCP tool names checked at Start, "
+                          f"e.g. mcp__flowkiwi__): run {command}")
+    if not state.get("mcp_url"):
+        raise PromptError(f"{path} has no mcp_url (the Flowkiwi MCP server of the tenant): "
+                          f"run {command} --mcp-url <url>")
+    return {"TOOLS_PREFIX": state["tools_prefix"], "MCP_URL": state["mcp_url"]}
+
+
+def mcp_rules(create, server):
+    return fill(create.block("Worker MCP rules"), server)
+
+
+def _check_worklist(directory, worker, handles, state, module, update):
+    """Every handle of the worklist has the status its mode works on, else the worklist is from another run."""
+    if update:
+        allowed, option = ("created", "archived"), " --update"
+    elif module:
+        allowed, option = ("created",), f" --module {module}"
+    else:
+        allowed, option = ("pending", "failed"), ""
+    again = f"run state.py worklists {directory} --workers <n>{option} again"
+    name = f"worklists/worker-{worker}.json"
+    if not isinstance(handles, list):
+        raise PromptError(f"{name} is not a list of handles: {again}")
+    products = state.get("products") or {}
+    for handle in handles:
+        product = products.get(handle)
+        if product is None:
+            raise PromptError(f"{name}: {handle} is not in state.json: {again}")
+        if product.get("status") not in allowed:
+            raise PromptError(f"{name}: {handle} is {product.get('status')}, not {' or '.join(allowed)}: "
+                              f"this worklist is not for this run, {again}")
 
 
 def worker_prompt(directory, worker, module=None, update=False, skill=SKILL_DIR):
@@ -138,6 +186,9 @@ def worker_prompt(directory, worker, module=None, update=False, skill=SKILL_DIR)
     worklist = os.path.join(directory, "worklists", f"worker-{worker}.json")
     if not os.path.isfile(worklist):
         raise PromptError(f"worklists/worker-{worker}.json not found in {directory}: run state.py worklists first")
+    state = _state(directory)
+    server = _server(directory, state, skill)
+    _check_worklist(directory, worker, _read_json(worklist), state, module, update)
     create = Reference(skill, "create.md")
     created_vs_reused = create.paragraph("Per product", "**Created vs reused.**")
     if update:
@@ -157,11 +208,12 @@ def worker_prompt(directory, worker, module=None, update=False, skill=SKILL_DIR)
         "WORKLIST_PATH": worklist,
         "PRODUCTS_PATH": os.path.join(directory, "products.json"),
         "STATE_PATH": os.path.join(directory, "state.json"),
-        "MIGRATION_STARTED_AT": _started_at(directory),
+        "MIGRATION_STARTED_AT": state["started_at"],
         "RESULT_PATH": os.path.join(directory, "results", f"worker-{worker}.jsonl"),
         "WORK_DIR": os.path.join(directory, "tmp", f"worker-{worker}"),
         "SKILL": skill,
-        "MCP_RULES": create.block("Worker MCP rules"),
+        "TOOLS_PREFIX": server["TOOLS_PREFIX"],
+        "MCP_RULES": mcp_rules(create, server),
         "PER_PRODUCT": localized("\n\n".join(parts), skill, directory),
     }
     return name, fill(create.block("Worker prompt template"), values)
@@ -169,14 +221,23 @@ def worker_prompt(directory, worker, module=None, update=False, skill=SKILL_DIR)
 
 def shared_prompt(directory, skill=SKILL_DIR):
     directory = os.path.abspath(directory)
+    server = _server(directory, _state(directory), skill)
     create = Reference(skill, "create.md")
     values = {
         "DIR": directory,
         "SKILL": skill,
         "WORK_DIR": os.path.join(directory, "tmp", "shared"),
-        "MCP_RULES": create.block("Worker MCP rules"),
+        "TOOLS_PREFIX": server["TOOLS_PREFIX"],
+        "MCP_RULES": mcp_rules(create, server),
     }
     return "shared", fill(create.block("Shared elements worker"), values)
+
+
+def rules_prompt(directory, skill=SKILL_DIR):
+    """The MCP rules block alone, filled with the server of state.json (the read-only snapshot worker)."""
+    directory = os.path.abspath(directory)
+    server = _server(directory, _state(directory), skill)
+    return "mcp-rules", mcp_rules(Reference(skill, "create.md"), server)
 
 
 def with_python(text, command):
@@ -208,12 +269,16 @@ def main(argv):
     worker.add_argument("--python", default="python3")
     shared = sub.add_parser("shared")
     shared.add_argument("--python", default="python3")
+    rules = sub.add_parser("rules")
+    rules.add_argument("--python", default="python3")
     args = parser.parse_args(argv)
     try:
         if args.command == "worker":
             name, text = worker_prompt(args.dir, args.worker, args.module, args.update)
-        else:
+        elif args.command == "shared":
             name, text = shared_prompt(args.dir)
+        else:
+            name, text = rules_prompt(args.dir)
     except PromptError as error:
         print(f"error: {error}", file=sys.stderr)
         return 1
