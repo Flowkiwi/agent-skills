@@ -18,13 +18,13 @@ Flowkiwi model: a metafield definition (`namespace`, `key`, `name`, `ownerType` 
                          "value": {"from": ["main:matiere", "main:coloris"], "pick": "all"}}}}
 ```
 
-| Key                | Meaning                                                                                           | Default       |
-| ------------------ | ------------------------------------------------------------------------------------------------- | ------------- |
-| `name`             | name of the definition, 3+ characters, in `decisions.data_language`                               | required      |
-| `type`             | one of the Flowkiwi types below                                                                   | required      |
-| `value`            | field spec of the column(s) (`from`, `pick`, `map`, `transform`...) or a literal `{"value": ...}` | required      |
-| `transform`        | how `payload.py` writes the value: `null` (as is), `list_json`, `list`, `number`, `json`          | from the type |
-| `origin`, `reason` | who chose the definition and why, as in `references/mapping.md`                                   | none          |
+| Key                | Meaning                                                                                                                | Default       |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------- | ------------- |
+| `name`             | name of the definition, 3+ characters, in `decisions.data_language`                                                    | required      |
+| `type`             | one of the Flowkiwi types below                                                                                        | required      |
+| `value`            | field spec of the column(s) (`from`, `pick`, `map`, `transform`...) or a literal `{"value": ...}`                      | required      |
+| `transform`        | how `payload.py` writes the value: `null` (as is), `list_json`, `number` (`list` and `json` are not usable, see below) | from the type |
+| `origin`, `reason` | who chose the definition and why, as in `references/mapping.md`                                                        | none          |
 
 1. **Retained columns**: the rows of `$S/columns.py propose <dir>` with role `metafield` (numbers, dates, technical specifications with a unit), with the proposed type from the values. Show them and ask which ones to keep; the others stay out of the catalog (or become attributes, `references/taxonomy.md`, when the developer wants to filter on them).
 2. **Namespace and key**: namespace `custom` by default, key from the technical code of the column (`dim_poids_net` -> `custom.poids_net`), lowercase, 3+ characters. Never reuse a key of another definition.
@@ -50,7 +50,7 @@ Booleans have no type: keep them as `single_line_text_field` (`Oui` / `Non` thro
 
 **Validate every type explicitly**: show one table with one row per kept definition (`namespace.key`, name, proposed type, value count, sample value) and get the developer's approval per row. The type of a definition cannot be changed later: a wrong type means deleting the definition and its values (`references/undo.md`, scope `shared:<key>`), then recreating them. Show the table again in the dry-run summary.
 
-List values: the format Flowkiwi expects for a list metafield is checked with one `create_metafield` on the pilot, then the `transform` is set in the mapping (`list_json`: a JSON array as text, the default; `list`: a JSON array) and the concept is extracted again.
+List values: the value must stay a JSON string, as the MCP schema of `create_metafield` only accepts a string `value`: `list_json` (a JSON array as text) is the list transform to use, the default. `list` and `json` write a JSON array or object, not a string: they are not usable until the MCP accepts them (a worker fails the product on that refusal and never changes the value, the schema refusal rule of `references/create.md` `## Worker MCP rules`). A `json` metafield keeps the default transform `null`: its value is sent as the JSON text of the cell.
 
 ## Record
 
