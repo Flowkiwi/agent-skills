@@ -273,15 +273,22 @@ class FormatTableTest(unittest.TestCase):
     def test_sorted_by_role_then_letter_and_cut(self):
         entries = [self.entry("A", "ignore"), self.entry("B", "core", label="L" * 100),
                    self.entry("C", "attribute", kind="list__single_line_text_field"), self.entry("D", "core"),
-                   self.entry("AA", "metafield", reason="x" * 80)]
+                   self.entry("AA", "metafield", reason="x" * 100)]
         lines = columns.format_table(entries).splitlines()
         self.assertEqual([line.split("|")[1].strip() for line in lines[2:]],
                          ["main:b", "main:d", "main:c", "main:aa", "main:a"])
         self.assertEqual(len({len(line) for line in lines}), 1)
         self.assertIn(" " + "L" * 37 + "... |", lines[2])
-        self.assertIn(" " + "x" * 57 + "... |", lines[5])
+        self.assertIn(" " + "x" * 87 + "... |", lines[5])
         self.assertIn(" list__single_line_text_field |", lines[4])
         self.assertEqual(entries[1]["label"], "L" * 100)
+
+    def test_numeric_reasons_are_shown_in_full(self):
+        for flags in ([], [{"flag": "suspect_scale"}]):
+            reason = columns.triage(column(kind="number", distinct=13, flags=flags), ["1"])[2]
+            table = columns.format_table([self.entry("A", "metafield", reason=reason)])
+            self.assertIn("(attributes have no ranges)", table)
+            self.assertNotIn("...", table)
 
 
 if __name__ == "__main__":

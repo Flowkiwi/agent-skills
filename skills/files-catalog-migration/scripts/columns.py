@@ -30,7 +30,7 @@ NUMBER_ATTRIBUTE_MAX = 12  # more distinct numbers than this: a metafield, attri
 PROPOSAL = os.path.join("tmp", "columns-proposal.json")
 ROLES = ("core", "attribute", "metafield", "description", "ignore")
 UNIT_RE = re.compile(r"[(\[]\s*[^\W\d_][^\W_]{0,2}(/[^\W\d_][^\W_]{0,2})?\s*[)\]]")
-MAX_WIDTHS = {"column": 40, "label": 40, "reason": 60}
+MAX_WIDTHS = {"column": 40, "label": 40, "reason": 90}
 
 
 def referenced(m: dict, loaded: dict) -> Set[Tuple[str, int]]:

@@ -33,7 +33,7 @@ import json
 import os
 import shlex
 import sys
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import catalog
 import clean
@@ -381,7 +381,7 @@ def vendor_map_warnings(directory: str) -> List[str]:
         return []
 
 
-def concepts_section(files, products, directory: str = None) -> List[str]:
+def concepts_section(files, products, directory: Optional[str] = None) -> List[str]:
     if not files:
         return ["Concepts: none"]
     lines = ["Concepts:"]
