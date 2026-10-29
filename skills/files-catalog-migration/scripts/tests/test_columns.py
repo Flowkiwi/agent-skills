@@ -107,9 +107,11 @@ class TriageRulesTest(unittest.TestCase):
         ("3 duplicate", column(flags=SAME_AS_A), None, ("ignore", None, "duplicate of A")),
         ("3 constant column", column(flags=[{"flag": "constant", "value": "Inox"}], distinct=1), None,
          ("ignore", None, "constant: Inox")),
-        ("3 constant column that also copies another", column(flags=SAME_AS_A + [{"flag": "constant", "value": "1"}],
-                                                              distinct=1), None, ("ignore", None, "constant: 1")),
-        ("3 same values, one distinct value", column(flags=SAME_AS_A, distinct=1), None, ("attribute", "list", "1 distinct values")),
+        ("3 constant column that also copies another",
+         column(flags=SAME_AS_A + [{"flag": "constant", "value": "1"}], distinct=1), None,
+         ("ignore", None, "constant: 1")),
+        ("3 same values, one distinct value", column(flags=SAME_AS_A, distinct=1), None,
+         ("attribute", "list", "1 distinct values")),
         ("3 two yes/no columns", column(flags=SAME_AS_A, kind="boolean", distinct=2),
          [column(letter="A", kind="boolean")], ("attribute", "list", "yes/no values")),
         ("3 yes/no copy of a text column", column(flags=SAME_AS_A, kind="boolean", distinct=2),
@@ -189,6 +191,71 @@ class DuplicateWinnerTest(unittest.TestCase):
         a, b, c = self.triage_all(sheet)
         self.assertEqual(a[2], "3 distinct values, winner over B, C")
         self.assertEqual((b[2], c[2]), ("duplicate of A", "duplicate of A"))
+
+
+class PinnedColumnTest(unittest.TestCase):
+    """A column read by the products mapping (pinned) never loses a duplicate pair."""
+    SAME = {"flag": "same_values", "with": "A"}
+    SIMILAR = {"flag": "similar_label", "with": "A", "conflicts": 1}
+    MORE = "consider it in the products mapping"
+
+    def test_core_earlier_and_worse_filled_still_wins(self):
+        sheet = pair((0.78, "Hauteur", []), (0.97, "Hauteur (cm)", [self.SAME]))
+        self.assertEqual(columns.triage(sheet[1], ["v"], sheet, {"A"}), (
+            "ignore", None, "duplicate of A (read by products, 78%); this column is better filled (97%): "
+            + self.MORE))
+        similar = pair((0.78, "Hauteur", []), (0.97, "Hauteur (cm)", [self.SIMILAR]))
+        self.assertEqual(columns.triage(similar[1], ["v"], similar, {"A"}), (
+            "ignore", None, 'similar to A (1 conflicts, read by products, 78%): merge into one "from", winner first; '
+            "this column is better filled (97%): " + self.MORE))
+
+    def test_core_earlier_and_better_filled_is_a_plain_duplicate(self):
+        sheet = pair((0.97, "Hauteur", []), (0.78, "Hauteur (cm)", [self.SAME]))
+        self.assertEqual(columns.triage(sheet[1], ["v"], sheet, {"A"}), ("ignore", None, "duplicate of A"))
+
+    def test_core_later_better_filled_than_its_partner_is_a_plain_duplicate(self):
+        sheet = pair((0.78, "Hauteur", []), (0.97, "Hauteur (cm)", [self.SAME]))
+        self.assertEqual(columns.triage(sheet[0], ["v"], sheet, {"B"}), ("ignore", None, "duplicate of B"))
+        similar = pair((0.78, "Hauteur", []), (0.97, "Hauteur (cm)", [self.SIMILAR]))
+        self.assertEqual(columns.triage(similar[0], ["v"], similar, {"B"}),
+                         ("ignore", None, 'similar to B (1 conflicts): merge into one "from", winner first'))
+
+    def test_core_later_worse_filled_than_its_partner_says_so(self):
+        sheet = pair((0.97, "Hauteur", []), (0.78, "Hauteur (cm)", [self.SAME]))
+        self.assertEqual(columns.triage(sheet[0], ["v"], sheet, {"B"}), (
+            "ignore", None, "duplicate of B (read by products, 78%); this column is better filled (97%): " + self.MORE))
+        similar = pair((0.97, "Hauteur", []), (0.78, "Hauteur (cm)", [self.SIMILAR]))
+        self.assertEqual(columns.triage(similar[0], ["v"], similar, {"B"}), (
+            "ignore", None, 'similar to B (1 conflicts, read by products, 78%): merge into one "from", winner first; '
+            "this column is better filled (97%): " + self.MORE))
+
+    def test_equal_fill_rate_with_a_unit_counts_as_better(self):
+        sheet = pair((0.9, "Hauteur", []), (0.9, "Hauteur (cm)", [self.SAME]))
+        self.assertIn("this column is better filled", columns.triage(sheet[1], ["v"], sheet, {"A"})[2])
+        plain = pair((0.9, "Hauteur (cm)", []), (0.9, "Hauteur", [self.SAME]))
+        self.assertEqual(columns.triage(plain[1], ["v"], plain, {"A"})[2], "duplicate of A")
+
+    def test_without_pinned_columns_the_winner_rule_applies(self):
+        sheet = pair((0.78, "Hauteur", []), (0.97, "Hauteur (cm)", [self.SAME]))
+        self.assertEqual(columns.triage(sheet[1], ["v"], sheet)[2], "3 distinct values, winner over A")
+
+    def test_propose_passes_the_columns_read_by_the_mapping(self):
+        directory = make_workspace(self)
+        path = os.path.join(directory, "mappings", "products.json")
+        with open(path, encoding="utf-8") as f:
+            data = json.load(f)
+        data["product"]["vendor"]["from"].append("main:poids_net")
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f)
+        inv = columns.read_inventory(directory)
+        cols = {c["letter"]: c for c in inv["files"][0]["sheets"][0]["columns"]}
+        cols["G"]["fill_rate"], cols["H"]["fill_rate"] = 0.5, 0.9
+        inventory.write_inventory(directory, inv)
+        by_letter = {e["letter"]: e for e in columns.propose(directory) if e["column"].startswith("main:")}
+        self.assertEqual(by_letter["G"]["role"], "core")
+        self.assertEqual(by_letter["H"]["reason"], (
+            'similar to G (1 conflicts, read by products, 50%): merge into one "from", winner first; '
+            "this column is better filled (90%): " + self.MORE))
 
 
 class FormatTableTest(unittest.TestCase):

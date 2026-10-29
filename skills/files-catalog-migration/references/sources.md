@@ -42,7 +42,7 @@ Flags:
 | `boolean_variants` | a column of yes/no answers (at least half of its values) spelling one answer several ways (`OUI`, `oui`, `Oui`)                      |
 | `value_variants`   | distinct values equal once case and accents are ignored (`Inox`, `inox`)                                                             |
 
-For a duplicate pair (`same_values`, `similar_label`), `columns.py propose` keeps the column with the higher fill rate; on equal rates, the one whose label holds an explicit unit in parentheses or brackets (`(cm)`, `[kg]`, `(W)`); otherwise the earlier one. The other is proposed as `ignore`, and the kept column's reason ends with `winner over <letter>`.
+For a duplicate pair (`same_values`, `similar_label`), `columns.py propose` keeps the column with the higher fill rate; on equal rates, the one whose label holds an explicit unit in parentheses or brackets (`(cm)`, `[kg]`, `(W)`); otherwise the earlier one. A column read by the products mapping always wins its pair (when the other one is better filled, the reason says so, to consider it in the mapping). The other is proposed as `ignore`, and the kept column's reason ends with `winner over <letter>`.
 
 After the run, summarize to the developer, sheet by sheet: the empty columns, the duplicates (`same_values`, `similar_label` with their conflict counts), the columns whose content does not match the label, the suspect scales and the spelling variants.
 

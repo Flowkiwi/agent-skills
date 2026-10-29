@@ -13,7 +13,7 @@ import json
 import os
 import re
 import sys
-from typing import List, Optional, Set, Tuple
+from typing import Collection, List, Optional, Set, Tuple
 
 import clean
 import codes
@@ -62,14 +62,15 @@ def ignored_alone(column: dict) -> bool:
     return bool(first_flag(column, "empty") or column["fill_rate"] < SPARSE_BELOW or first_flag(column, "constant"))
 
 
-def relation(column: dict, columns: Optional[List[dict]]) -> Optional[Tuple[dict, Optional[dict]]]:
+def relation(column: dict, columns: Optional[List[dict]],
+             pinned: Collection[str] = ()) -> Optional[Tuple[dict, Optional[dict]]]:
     """(flag, other column) of the duplicate relation a column holds with an earlier column, if any."""
     same = first_flag(column, "same_values")
     flag = same if is_duplicate(column, same, columns) else first_flag(column, "similar_label")
     if flag is None:
         return None
     other = next((c for c in columns or [] if c.get("letter") == flag["with"]), None)
-    if other is not None and ignored_alone(other):
+    if other is not None and flag["with"] not in pinned and ignored_alone(other):
         return None
     return flag, other
 
@@ -81,33 +82,58 @@ def winner_of(earlier: dict, later: dict) -> dict:
     return later if has_unit(later) and not has_unit(earlier) else earlier
 
 
-def loser_reason(flag: dict, winner: str) -> str:
+def percent(column: dict) -> str:
+    return "%d%%" % round(column["fill_rate"] * 100)
+
+
+def loser_reason(flag: dict, winner: str, mapped: Optional[Tuple[dict, dict]] = None) -> str:
+    """mapped: (column read by the products mapping, this better filled column) when the winner is pinned."""
+    note = "read by products, %s" % percent(mapped[0]) if mapped else ""
     if flag["flag"] == "same_values":
-        return "duplicate of %s" % winner
-    return 'similar to %s (%d conflicts): merge into one "from", winner first' % (winner, flag["conflicts"])
+        reason = "duplicate of %s%s" % (winner, " (%s)" % note if note else "")
+    else:
+        reason = 'similar to %s (%d conflicts%s): merge into one "from", winner first' % (
+            winner, flag["conflicts"], ", " + note if note else "")
+    if mapped:
+        reason += "; this column is better filled (%s): consider it in the products mapping" % percent(mapped[1])
+    return reason
 
 
-def duplicate_outcome(column: dict, columns: Optional[List[dict]]) -> Tuple[Optional[str], List[str]]:
+def pinned_loss(flag: dict, pinned_column: Optional[dict], column: dict) -> str:
+    """Reason of a column that loses its pair against a column read by the products mapping."""
+    better = pinned_column is not None and winner_of(pinned_column, column) is column
+    return loser_reason(flag, flag["with"], (pinned_column, column) if better else None)
+
+
+def duplicate_outcome(column: dict, columns: Optional[List[dict]],
+                      pinned: Collection[str] = ()) -> Tuple[Optional[str], List[str]]:
     """(reason to ignore the column as the losing side of a duplicate pair, letters of the columns it beats)."""
     beaten = []  # type: List[str]
-    own = relation(column, columns)
+    own = relation(column, columns, pinned)
     if own is not None:
         flag, other = own
+        if flag["with"] in pinned:
+            return pinned_loss(flag, other, column), []
         if other is None or winner_of(other, column) is other:
             return loser_reason(flag, flag["with"]), []
         beaten.append(flag["with"])
     for later in columns or []:
-        held = relation(later, columns) if later is not column else None
+        held = relation(later, columns, pinned) if later is not column else None
         if held is None or held[0]["with"] != column.get("letter"):
             continue
+        if later["letter"] in pinned:
+            better = winner_of(later, column) is column
+            return loser_reason(held[0], later["letter"], (later, column) if better else None), []
         if winner_of(column, later) is later:
             return loser_reason(held[0], later["letter"]), []
         beaten.append(later["letter"])
     return None, beaten
 
 
-def triage(column: dict, values: List[str], columns: Optional[List[dict]] = None) -> Tuple[str, Optional[str], str]:
-    """(role, type, reason) of a column that the mapping does not read; columns: the other columns of its sheet."""
+def triage(column: dict, values: List[str], columns: Optional[List[dict]] = None,
+           pinned: Collection[str] = ()) -> Tuple[str, Optional[str], str]:
+    """(role, type, reason) of a column that the mapping does not read; columns: the other columns of its sheet;
+    pinned: letters of the columns the mapping reads, which never lose a duplicate pair."""
     if first_flag(column, "empty"):
         return "ignore", None, "empty"
     if column["fill_rate"] < SPARSE_BELOW:
@@ -115,7 +141,7 @@ def triage(column: dict, values: List[str], columns: Optional[List[dict]] = None
     constant = first_flag(column, "constant")
     if constant:
         return "ignore", None, "constant: %s" % constant["value"]
-    loser, beaten = duplicate_outcome(column, columns)
+    loser, beaten = duplicate_outcome(column, columns, pinned)
     if loser:
         return "ignore", None, loser
     role, kind_type, reason = classify(column, values)
@@ -169,11 +195,12 @@ def propose(directory: str) -> List[dict]:
     entries = []  # type: List[dict]
     for source_id, source in loaded.items():
         sheet_columns = sheet_of(inv, source)["columns"]
+        pinned = {sheet_columns[i]["letter"] for sid, i in used if sid == source_id}
         for index, column in enumerate(sheet_columns):
             if (source_id, index) in used:
                 role, kind_type, reason = "core", None, "used by products"
             else:
-                role, kind_type, reason = triage(column, column_values(source, index), sheet_columns)
+                role, kind_type, reason = triage(column, column_values(source, index), sheet_columns, pinned)
             name = column["code"] or column["label"] or "@" + column_letter(index)
             entries.append({"column": "%s:%s" % (source_id, name), "letter": column["letter"],
                             "label": column["label"], "role": role, "type": kind_type, "reason": reason})
