@@ -1,6 +1,6 @@
 # Products and variants
 
-The mandatory concept: products, options, variants, SKUs and barcodes, from `mappings/products.json` (format in `references/mapping.md`) to `products.json` (format in `references/state.md`). Schemas below were checked on 2026-10-26. If a call is rejected for an unknown or missing field, run `describe_operation` on it and adapt; do not guess.
+The mandatory concept: products, options, variants, SKUs and barcodes, from `mappings/products.json` (format in `references/mapping.md`) to `products.json` (format in `references/state.md`). Schemas below were checked on 2026-10-26. If a call is rejected for an unknown or missing field, run `describe_operation` on it and adapt the argument names; do not guess, and never change a value printed by a script (`references/create.md` `## Worker MCP rules`).
 
 ## Effort
 
