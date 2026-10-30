@@ -1,0 +1,6 @@
+{"version": 1, "concept": "metaobjects", "reference_validation": true,
+ "definitions": [{"type": "marque", "name": "Marque", "display_name_field": "nom", "entry_key": "nom", "status": "ACTIVE",
+                  "fields": [{"key": "nom", "name": "Nom", "type": "single_line_text_field", "required": true,
+                              "value": {"from": ["main:marque"], "map": {"toastine": "Toastine"}, "map_ignore_case": true}}],
+                  "reference": {"metafield": "custom.marque", "name": "Marque"},
+                  "origin": "agent", "reason": "La colonne Marque devient une fiche par marque reliée aux produits."}]}

@@ -1,0 +1,3 @@
+{"version": 1, "concept": "metafields", "definitions": {
+  "custom.poids_net": {"name": "Poids net (kg)", "type": "number_decimal",
+                       "value": {"from": ["main:dim_poids_net", "main:poids_net"], "transform": ["decimal"]}}}}

@@ -1,0 +1,4 @@
+{"version": 1, "concept": "prices",
+ "countries": [{"country": "/api/countries/00000000-0000-4000-8000-000000000250", "code": "FR", "currency": "EUR",
+                "tax": null, "rate": "20", "tax_name": "TVA 20 FR", "tax_included": true}],
+ "channels": null, "status": "/api/statuses/ACTIVE"}

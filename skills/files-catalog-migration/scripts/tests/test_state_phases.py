@@ -1,0 +1,359 @@
+import io
+import os
+import sys
+import tempfile
+import unittest
+from contextlib import redirect_stderr
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+import diff  # noqa: E402
+import dryrun  # noqa: E402
+import state  # noqa: E402
+from phase_helpers import (created_line, make_products, make_state, product_iri, read_json, run_cli,  # noqa: E402
+                           variant_iri, write_json, write_workspace)
+
+
+class PhasesTest(unittest.TestCase):
+    def setUp(self):
+        self.products = make_products()
+        self.st = make_state(self.products)
+
+    def test_init_records_phase_one(self):
+        self.assertEqual(self.st["phase"], 1)
+        self.assertEqual(self.st["phases"], [{"n": 1, "started_at": self.st["started_at"]}])
+
+    def test_merge_records_written(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        written = self.st["products"]["2226"]["written"]
+        self.assertEqual(written["phase"], 1)
+        self.assertEqual(written["payload"]["product"]["body"]["title"], self.products["products"][0]["title"])
+
+    def test_phase_start_and_update_line(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        self.assertEqual(state.start_phase(self.st), 2)
+        self.products["products"][0]["title"] = "Nouveau titre"
+        variant = self.st["products"]["2226"]["items"][1]["iri"]
+        state.merge(self.st, [dict(created_line("2226"), status="updated", items=[], deleted=[variant])], self.products)
+        p = self.st["products"]["2226"]
+        self.assertEqual((p["status"], p["updated_phase"], p["written"]["phase"]), ("created", 2, 2))
+        self.assertEqual(p["written"]["payload"]["product"]["body"]["title"], "Nouveau titre")
+        self.assertEqual(p["items"][1]["status"], "deleted")
+
+    def test_removed_flag_and_archived(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        state.sync_products(self.st, {"products": [p for p in self.products["products"] if p["handle"] != "2226"]})
+        self.assertTrue(self.st["products"]["2226"]["removed"])
+        state.merge(self.st, [dict(created_line("2226"), status="archived", items=[])], self.products)
+        self.assertEqual(self.st["products"]["2226"]["status"], "archived")
+
+    def test_archived_snapshot_keeps_written_with_status(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        before = self.st["products"]["2226"]["written"]["payload"]
+        state.start_phase(self.st)
+        gone = {"products": [p for p in self.products["products"] if p["handle"] != "2226"]}
+        state.merge(self.st, [dict(created_line("2226"), status="archived", items=[])], gone)
+        written = self.st["products"]["2226"]["written"]
+        self.assertEqual(written["phase"], 2)
+        self.assertEqual(written["payload"]["product"]["body"]["status"], "/api/statuses/ARCHIVED")
+        self.assertEqual(before["product"]["body"]["status"], "/api/statuses/DRAFT")
+        self.assertEqual(written["payload"]["variants"], before["variants"])
+
+    def test_module_line_refreshes_only_its_part(self):
+        material = "/api/metafield_definitions/00000000-0000-4000-8000-000000000002"
+        state.merge(self.st, [created_line("2226")], self.products)
+        self.products["products"][0]["title"] = "Titre change sans update"
+        self.products["products"][0]["metafields"] = {"custom.material": "Inox"}
+        state.decide(self.st, "metafields", {"definitions": {"custom.material": {"type": "single_line_text_field"}}},
+                     "developer")
+        state.record_shared(self.st, "metafield_definition:custom.material", material, "created", "metafields")
+        state.merge(self.st, [{"handle": "2226", "module": "metafields", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        p = self.st["products"]["2226"]
+        self.assertEqual(p["status"], "created")
+        self.assertEqual(p["written"]["payload"]["product"]["body"]["title"], "Grille-pain")
+        self.assertEqual(p["written"]["payload"]["metafields"],
+                         [{"key": "custom.material", "shared": "metafield_definition:custom.material",
+                           "body": {"definition": material, "value": "Inox"}}])
+
+    def test_taxonomy_and_metaobjects_lines_keep_the_other_parts(self):
+        material = "/api/metafield_definitions/00000000-0000-4000-8000-000000000002"
+        brand_def = "/api/metafield_definitions/00000000-0000-4000-8000-000000000003"
+        brand = "/api/metaobjects/00000000-0000-4000-8000-000000000004"
+        category = "/api/categories/00000000-0000-4000-8000-000000000005"
+        self.products["products"][0]["metafields"] = {"custom.material": "Inox"}
+        state.decide(self.st, "metafields", {"definitions": {"custom.material": {"type": "single_line_text_field"}}},
+                     "developer")
+        state.record_shared(self.st, "metafield_definition:custom.material", material, "created", "metafields")
+        state.merge(self.st, [created_line("2226")], self.products)
+        self.products["products"][0]["metafields"] = {"custom.material": "Acier"}
+        self.products["products"][0]["title"] = "Titre change sans update"
+        state.decide(self.st, "metaobjects", {"definitions": [{"type": "marque",
+                                                               "reference": {"metafield": "custom.marque"}}],
+                                              "values": {"2226": {"marque": "toastine"}}}, "developer")
+        state.record_shared(self.st, "metafield_definition:custom.marque", brand_def, "created", "metaobjects")
+        state.record_shared(self.st, "metaobject:marque:toastine", brand, "created", "metaobjects")
+        state.decide(self.st, "taxonomy", {"products": {"2226": "Cuisine"}, "attributes": []}, "developer")
+        state.record_shared(self.st, "category:Cuisine", category, "created", "taxonomy")
+        for module in ("metaobjects", "taxonomy"):
+            state.merge(self.st, [{"handle": "2226", "module": module, "status": "created",
+                                   "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        written = self.st["products"]["2226"]["written"]["payload"]
+        self.assertEqual([(m["key"], m["body"]["value"]) for m in written["metafields"]],
+                         [("custom.material", "Inox"), ("custom.marque", brand.rsplit("/", 1)[1])])
+        self.assertEqual((written["product"]["body"]["title"], written["product"]["body"]["category"]),
+                         ("Grille-pain", category))
+        state.merge(self.st, [{"handle": "2226", "module": "metafields", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        self.assertEqual([(m["key"], m["body"]["value"]) for m in self.st["products"]["2226"]["written"]["payload"]
+                          ["metafields"]], [("custom.material", "Acier"), ("custom.marque", brand.rsplit("/", 1)[1])])
+
+    def test_module_line_without_snapshot_records_none(self):
+        state.merge(self.st, [created_line("2226")])
+        state.merge(self.st, [{"handle": "2226", "module": "prices", "status": "created",
+                               "iri": product_iri("2226"), "error": None, "items": []}], self.products)
+        self.assertNotIn("written", self.st["products"]["2226"])
+
+    def test_product_scope(self):
+        state.merge(self.st, [created_line("2226"), created_line("2230")], self.products)
+        owners = {s["owner"] for s in state.undo_plan(self.st, "product:2226")}
+        self.assertEqual(owners, {"2226"})
+
+    def test_phase_refused_with_unmerged_results(self):
+        with tempfile.TemporaryDirectory() as directory:
+            write_workspace(directory, self.products, self.st)
+            write_json(os.path.join(directory, "results", "worker-1.jsonl"), created_line("2226"))
+            result = run_cli("phase", directory, "--start")
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("run state.py merge first", result.stderr)
+            self.assertEqual(read_json(os.path.join(directory, "state.json"))["phase"], 1)
+
+
+class PhaseDetailsTest(unittest.TestCase):
+    def setUp(self):
+        self.products = make_products()
+        self.st = make_state(self.products)
+
+    def without(self, handle):
+        return {"products": [p for p in self.products["products"] if p["handle"] != handle]}
+
+    def test_start_phase_appends_phases(self):
+        state.start_phase(self.st)
+        self.assertEqual(state.start_phase(self.st), 3)
+        self.assertEqual([p["n"] for p in self.st["phases"]], [1, 2, 3])
+        self.assertEqual(state.summary(self.st)["phase"], 3)
+
+    def test_written_needs_products(self):
+        state.merge(self.st, [created_line("2226")])
+        self.assertNotIn("written", self.st["products"]["2226"])
+
+    def test_payload_error_keeps_written(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        before = self.st["products"]["2226"]["written"]
+        del self.st["decisions"]["status_mode"]
+        state.start_phase(self.st)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            state.merge(self.st, [dict(created_line("2226"), status="updated", items=[])], self.products)
+        self.assertEqual(self.st["products"]["2226"]["written"], before)
+        self.assertEqual(self.st["products"]["2226"]["updated_phase"], 2)
+        self.assertIn("warning: no written snapshot for 2226: decision 'status_mode' is missing", err.getvalue())
+
+    def test_failed_line_writes_no_snapshot(self):
+        state.merge(self.st, [dict(created_line("2226"), status="failed", error="422")], self.products)
+        self.assertNotIn("written", self.st["products"]["2226"])
+
+    def test_failed_update_keeps_created(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        state.start_phase(self.st)
+        state.merge(self.st, [dict(created_line("2226"), status="failed", items=[], error="variant 422")], self.products)
+        p = self.st["products"]["2226"]
+        self.assertEqual((p["status"], p["error"], p["written"]["phase"]), ("created", "variant 422", 1))
+
+    def test_updated_line_keeps_reused_children_as_written(self):
+        state.merge(self.st, [created_line("2230")], self.products)
+        self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["title"] = "Duo"
+        duo["variants"][1]["barcode"] = "3601234560999"
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual(written["product"]["body"]["title"], "Duo")
+        self.assertEqual({v["sku"]: v["barcode"] for v in written["variants"]},
+                         {"1005": "3601234560050", "1006": "3601234560067"})
+        self.assertEqual(diff.diff(self.st, self.products)["unmanaged_items"],
+                         {"2230": ["variants.changed.1006.barcode"]})
+
+    def test_updated_line_keeps_a_removed_reused_child(self):
+        state.merge(self.st, [created_line("2230")], self.products)
+        self.st["products"]["2230"]["items"][2]["status"] = "reused"    # variant 1006
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["variants"] = duo["variants"][:1]
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006"])
+        self.assertEqual(diff.diff(self.st, self.products)["unmanaged_items"], {"2230": ["variants.removed.1006"]})
+
+    def test_updated_line_leaves_out_a_deferred_variant(self):
+        countries = [{"code": "FR", "country": "/api/countries/00000000-0000-4000-8000-000000000010",
+                      "tax": "/api/taxes/00000000-0000-4000-8000-000000000011", "currency": "EUR"}]
+        offers = {"1005": {"FR": {"taxExcludedPrice": "30.00"}}, "1006": {"FR": {"taxExcludedPrice": "31.00"}}}
+        state.decide(self.st, "prices", {"offers": {"2230": offers}, "countries": countries}, "developer")
+        state.merge(self.st, [created_line("2230")], self.products)
+        state.start_phase(self.st)
+        duo = self.products["products"][1]
+        duo["options"][0]["values"] += ["Bleu", "Vert"]
+        duo["variants"] += [{"sku": "1007", "barcode": "3601234560074", "option_values": ["Bleu"]},
+                            {"sku": "1008", "barcode": "3601234560081", "option_values": ["Vert"]}]
+        offers["1007"] = {"FR": {"taxExcludedPrice": "32.00"}}
+        state.decide(self.st, "prices", {"offers": {"2230": offers}, "countries": countries}, "developer")
+        created = {"kind": "variant", "iri": variant_iri("2230", "1008"), "status": "created", "module": "core",
+                   "ref": "1008"}
+        state.merge(self.st, [dict(created_line("2230"), status="updated", items=[created])], self.products)
+        written = self.st["products"]["2230"]["written"]["payload"]
+        self.assertEqual([v["sku"] for v in written["variants"]], ["1005", "1006", "1008"])
+        self.assertEqual([p["sku"] for p in written["prices"]], ["1005", "1006"])
+        self.assertEqual([v["value"] for v in written["options"][0]["values"]], ["Noir", "Rouge", "Vert"])
+        change = diff.diff(self.st, self.products)["changed"]["2230"]
+        self.assertEqual((change["variants"], change["prices"], change["options"]),
+                         ({"added": ["1007"]}, {"added": ["1007:FR"]}, {"values_added": {"Couleur": ["Bleu"]}}))
+
+    def test_created_line_snapshot_unchanged_with_reused_children(self):
+        line = created_line("2230")
+        line["items"][2]["status"] = "reused"
+        state.merge(self.st, [line], self.products)
+        self.products["products"][1]["variants"][1]["barcode"] = "3601234560999"
+        state.merge(self.st, [dict(created_line("2230"), items=[])], self.products)
+        barcodes = {v["sku"]: v["barcode"] for v in self.st["products"]["2230"]["written"]["payload"]["variants"]}
+        self.assertEqual(barcodes["1006"], "3601234560999")
+
+    def test_removed_flag_cleared_when_back(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        state.sync_products(self.st, self.without("2226"))
+        state.sync_products(self.st, self.products)
+        self.assertNotIn("removed", self.st["products"]["2226"])
+
+    def test_archived_stays_flagged_and_pending_is_skipped(self):
+        state.merge(self.st, [dict(created_line("2226"), status="archived", items=[])], self.products)
+        state.sync_products(self.st, {"products": []})
+        self.assertTrue(self.st["products"]["2226"]["removed"])
+        self.assertEqual(self.st["products"]["2226"]["status"], "archived")
+        self.assertEqual(self.st["products"]["2230"]["status"], "skipped")
+        self.assertNotIn("removed", self.st["products"]["2230"])
+        self.assertEqual(state.summary(self.st)["removed"], 1)
+
+    def test_failed_update_is_in_summary(self):
+        state.merge(self.st, [created_line("2226"), created_line("2230")], self.products)
+        state.start_phase(self.st)
+        failed = {"handle": "2230", "status": "failed", "iri": None, "error": "409 conflict", "items": []}
+        state.merge(self.st, [failed], self.products)
+        summary = state.summary(self.st)
+        self.assertEqual(summary["update_failed"], [{"handle": "2230", "error": "409 conflict"}])
+        self.assertEqual((summary["failed"], self.st["products"]["2230"]["status"]), ([], "created"))
+        state.start_phase(self.st)
+        self.assertEqual(state.summary(self.st)["update_failed"], [])
+        state.merge(self.st, [dict(failed, status="updated", iri=product_iri("2230"), error=None)], self.products)
+        self.assertNotIn("error_phase", self.st["products"]["2230"])
+
+    def test_deleted_handle_is_never_flagged_removed(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        state.sync_products(self.st, self.without("2226"))
+        state.mark_deleted(self.st, [s["iri"] for s in state.undo_plan(self.st, "product:2226")])
+        self.assertEqual(self.st["products"]["2226"]["status"], "deleted")
+        self.assertNotIn("removed", self.st["products"]["2226"])
+        state.sync_products(self.st, self.without("2226"))
+        self.assertNotIn("removed", self.st["products"]["2226"])
+        self.assertEqual(state.summary(self.st)["removed"], 0)
+
+    def test_product_scope_children_first_and_created_only(self):
+        line = created_line("2230")
+        line["items"][1]["status"] = "reused"
+        state.merge(self.st, [line, created_line("2226")], self.products)
+        steps = state.undo_plan(self.st, "product:2230")
+        self.assertEqual([s["iri"] for s in steps], [variant_iri("2230", "1006"), product_iri("2230")])
+        self.assertNotIn("metafield_definition", {s["kind"] for s in steps})
+
+    def test_product_scope_errors(self):
+        self.assertEqual(state.check_scope("product:2226"), "product:2226")
+        with self.assertRaisesRegex(ValueError, "unknown handle 'nope'"):
+            state.undo_plan(self.st, "product:nope")
+        with self.assertRaisesRegex(ValueError, "product:<handle>"):
+            state.check_scope("product:")
+
+    def test_phase_decision_is_phase_scoped(self):
+        state.start_phase(self.st)
+        state.decide(self.st, "removed_action", {"phase": 1, "action": "archive"}, "developer")
+        self.assertIsNone(state.phase_decision(self.st, "removed_action"))
+        state.decide(self.st, "removed_action", {"phase": 2, "action": "archive"}, "developer")
+        self.assertEqual(state.phase_decision(self.st, "removed_action"), {"phase": 2, "action": "archive"})
+        state.start_phase(self.st)
+        self.assertIsNone(state.phase_decision(self.st, "removed_action"))
+        self.assertIsNone(state.phase_decision(self.st, "missing"))
+
+    def test_forced(self):
+        st = {"phase": 2, "decisions": {"force_update": {"phase": 1, "handles": "all"}}}
+        self.assertFalse(state.forced(st, "2226"))
+        st["decisions"]["force_update"] = {"phase": 2, "handles": ["2226"]}
+        self.assertTrue(state.forced(st, "2226"))
+        self.assertFalse(state.forced(st, "2230"))
+        st["decisions"]["force_update"] = {"phase": 2, "handles": "all"}
+        self.assertTrue(state.forced(st, "2230"))
+
+    def test_dryrun_does_not_count_deleted_as_to_create(self):
+        state.merge(self.st, [created_line("2226")], self.products)
+        state.mark_deleted(self.st, [product_iri("2226")])
+        pending, created = dryrun.split_products(self.products, self.st)
+        self.assertEqual(([p["handle"] for p in pending], created), (["2230"], 0))
+
+
+class ResultLineTest(unittest.TestCase):
+    def test_updated_and_archived_need_iri(self):
+        for status in ("updated", "archived"):
+            with self.assertRaisesRegex(ValueError, "iri is required"):
+                state.validate_result(dict(created_line("2226"), status=status, iri=None))
+            state.validate_result(dict(created_line("2226"), status=status))
+
+    def test_deleted_iris_are_checked(self):
+        state.validate_result(dict(created_line("2226"), deleted=[variant_iri("2226", "1001")]))
+        with self.assertRaisesRegex(ValueError, "Invalid IRI"):
+            state.validate_result(dict(created_line("2226"), deleted=["/api/variants/42"]))
+        with self.assertRaisesRegex(ValueError, "deleted must be a list"):
+            state.validate_result(dict(created_line("2226"), deleted=variant_iri("2226", "1001")))
+
+
+class PhaseCliTest(unittest.TestCase):
+    def setUp(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        self.dir = tmp.name
+        self.products = make_products()
+        write_workspace(self.dir, self.products, make_state(self.products))
+
+    def test_merge_then_start(self):
+        result_file = os.path.join(self.dir, "results", "worker-1.jsonl")
+        write_json(result_file, created_line("2226"))
+        self.assertEqual(run_cli("merge", self.dir).returncode, 0)
+        st = read_json(os.path.join(self.dir, "state.json"))
+        self.assertEqual(st["products"]["2226"]["written"]["payload"]["variants"][0]["sku"], "1001")
+        started = run_cli("phase", self.dir, "--start")
+        self.assertEqual((started.returncode, started.stdout.strip()), (0, "2"))
+        st = read_json(os.path.join(self.dir, "state.json"))
+        self.assertEqual((st["phase"], [p["n"] for p in st["phases"]]), (2, [1, 2]))
+        self.assertEqual(run_cli("phase", self.dir).stdout.strip(), "2")
+
+    def test_merge_warns_without_snapshot(self):
+        st = make_state(self.products)
+        del st["decisions"]["status_mode"]
+        write_workspace(self.dir, self.products, st)
+        write_json(os.path.join(self.dir, "results", "worker-1.jsonl"), created_line("2226"))
+        merged = run_cli("merge", self.dir)
+        self.assertEqual(merged.returncode, 0)
+        self.assertIn("warning: no written snapshot for 2226: decision 'status_mode' is missing", merged.stderr)
+        self.assertEqual(read_json(os.path.join(self.dir, "state.json"))["products"]["2226"]["status"], "created")
+
+
+if __name__ == "__main__":
+    unittest.main()

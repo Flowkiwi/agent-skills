@@ -113,12 +113,14 @@ class PayloadTest(unittest.TestCase):
     def test_metafield_transforms(self):
         self.assertEqual(payload.transform_value('["a", "b"]', "list_json"), '["a", "b"]')
         self.assertEqual(payload.transform_value("a; b\nc", "list"), ["a", "b", "c"])
-        self.assertEqual(payload.transform_value("12", "number"), 12)
-        self.assertEqual(payload.transform_value("1,5", "number"), 1.5)
+        for value, number in (("12", "12"), ("1,5", "1.5"), (" 18,4 ", "18.4"), ("6", "6"), ("-0,5", "-0.5"),
+                              ("18.40", "18.4"), ("6.0", "6"), ("0.1", "0.1"), ("1e3", "1000"), ("-0", "0")):
+            self.assertEqual(payload.transform_value(value, "number"), number)
         self.assertEqual(payload.transform_value('{"a": 1}', "json"), {"a": 1})
         self.assertEqual(payload.transform_value("<p>A &amp; B</p><p>C<br>D</p>", "strip_html"), "A & B\nC\nD")
         self.assertEqual(payload.transform_value("as is", None), "as is")
-        for value, transform in (("x", "number"), ("{", "json"), ("x", "upper")):
+        for value, transform in (("x", "number"), ("nan", "number"), ("inf", "number"), ("{", "json"),
+                                 ("x", "upper")):
             with self.assertRaises(payload.PayloadError):
                 payload.transform_value(value, transform)
 

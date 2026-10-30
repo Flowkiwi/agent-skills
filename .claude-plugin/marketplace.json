@@ -13,6 +13,15 @@
       "category": "migration",
       "tags": ["shopify", "catalog", "migration", "mcp"],
       "skills": ["./skills/shopify-catalog-migration"]
+    },
+    {
+      "name": "files-catalog-migration",
+      "source": "./",
+      "strict": false,
+      "description": "Build a Flowkiwi catalog from client spreadsheet files (xlsx, csv) through the Flowkiwi MCP, concept by concept",
+      "category": "migration",
+      "tags": ["xlsx", "csv", "catalog", "migration", "mcp"],
+      "skills": ["./skills/files-catalog-migration"]
     }
   ]
 }

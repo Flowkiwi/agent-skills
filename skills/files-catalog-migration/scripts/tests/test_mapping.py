@@ -1,0 +1,438 @@
+import json
+import os
+import sys
+import tempfile
+import unittest
+
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+import clean  # noqa: E402
+import client_review  # noqa: E402
+import columns  # noqa: E402
+import extract  # noqa: E402
+import mapping  # noqa: E402
+import taxonomy  # noqa: E402
+from demo_files import write_demo_csv, write_demo_xlsx  # noqa: E402
+from sources import Table  # noqa: E402
+
+MAIN_AND_PRICES = {
+    "version": 1, "concept": "products",
+    "sources": {"main": {"file": "demo-catalogue.xlsx", "sheet": "Catalogue"},
+                "prices": {"file": "demo-tarifs.csv", "join": {"column": "prices:SKU", "to": "main:sku_marchand"}}},
+    "key": {"from": ["main:sku_marchand"]},
+}
+
+
+def make_workspace(test):
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    sources = os.path.join(tmp.name, "sources")
+    os.makedirs(sources)
+    write_demo_xlsx(os.path.join(sources, "demo-catalogue.xlsx"))
+    write_demo_csv(os.path.join(sources, "demo-tarifs.csv"))
+    return tmp.name
+
+
+def csv_workspace(test, text):
+    tmp = tempfile.TemporaryDirectory()
+    test.addCleanup(tmp.cleanup)
+    os.makedirs(os.path.join(tmp.name, "sources"))
+    with open(os.path.join(tmp.name, "sources", "n.csv"), "w", encoding="utf-8") as f:
+        f.write(text)
+    one = {"version": 1, "concept": "products", "sources": {"main": {"file": "n.csv"}}}
+    cleaner = clean.Cleaner()
+    sources = mapping.load_sources(tmp.name, one, cleaner)
+    return sources, mapping.rows(sources, one, []), cleaner
+
+
+class MappingTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = make_workspace(self)
+        self.join_warnings, self.warnings = [], []
+        self.cleaner = clean.Cleaner()
+        self.sources = mapping.load_sources(self.dir, MAIN_AND_PRICES, self.cleaner)
+        self.rows = mapping.rows(self.sources, MAIN_AND_PRICES, self.join_warnings)
+
+    def ev(self, spec, index=0):
+        return mapping.evaluate(spec, self.rows[index], self.sources, self.warnings, "test")
+
+    def codes(self):
+        return [w["code"] for w in self.warnings]
+
+    def test_references(self):
+        self.assertEqual(self.ev({"from": ["main:accroche"]}), "Grille-pain 2 fentes Inox 1400W | TOASTINE")
+        self.assertEqual(self.ev({"from": ["main:Descriptif court"]}), "Grille-pain 2 fentes Inox 1400W | TOASTINE")
+        self.assertEqual(self.ev({"from": ["main:@M"]}), "argenté")
+        with self.assertRaises(mapping.MappingError):
+            self.ev({"from": ["main:nope"]})
+
+    def test_priority_and_conflicts(self):
+        spec = {"from": ["main:dim_poids_net", "main:poids_net"], "transform": ["decimal"]}
+        self.assertEqual(self.ev(spec, 0), "1.8")
+        self.assertEqual(self.warnings, [])                  # 1.8 vs 1,8: same number
+        self.assertEqual(self.ev(spec, 1), "2.6")
+        self.assertEqual(self.codes(), ["conflict"])
+        self.assertIn("poids_net", self.warnings[0]["message"])
+        self.assertEqual(self.ev(dict(spec, conflicts="ignore"), 1), "2.6")
+
+    def test_join(self):
+        price = {"from": ["prices:Prix public TTC", "main:prix"], "transform": ["decimal"]}
+        self.assertEqual(self.ev(price, 0), "39.90")
+        self.assertEqual(self.ev(price, 3), "27.90")
+        self.assertEqual(self.codes().count("conflict"), 1)   # 27,90 vs 29,90
+        join_codes = [w["code"] for w in self.join_warnings]
+        self.assertEqual(join_codes.count("join_unmatched"), 1)            # 9999
+        self.assertEqual(join_codes.count("join_missing"), 2)              # 1005, 1006
+
+    def test_transforms(self):
+        self.assertEqual(self.ev({"from": ["main:decongelation"], "transform": [{"boolean": ["Oui", "Non"]}]}, 1), "Non")
+        self.assertEqual(self.ev({"from": ["main:dim_poids_brut"], "transform": ["decimal", {"scale_above": [100, 1000]}]}, 1), "1.964")
+        self.assertEqual(self.ev({"from": ["main:matiere"], "map": {"inox": "Inox"}}, 2), "Inox")
+        self.assertEqual(self.ev({"from": ["main:matiere"], "map": {"INOX": "Acier inoxydable"}, "map_ignore_case": True}, 0), "Acier inoxydable")
+        self.assertEqual(self.ev({"from": ["main:accroche"], "transform": [{"regex": "^(.+?)(?: - (?:Noir|Rouge))?$"}]}, 5), "Grille-pain Duo")
+        self.assertEqual(self.ev({"from": ["main:visuel_princ", "main:visuel_sec_9"], "pick": "all"}, 0), ["https://example.com/img/1001.jpg"])
+        self.assertEqual(self.ev({"value": "x"}), "x")
+        self.assertIsNone(self.ev({"from": ["main:prix"], "transform": ["integer"]}, 0))
+        self.assertIn("not_a_number", self.codes())
+
+    def test_text_to_html(self):
+        self.assertEqual(mapping.apply_transform("a & b\nc\n\nd", "text_to_html"), "<p>a &amp; b<br>c</p><p>d</p>")
+
+    def test_load_mapping_rejects_bad_origin(self):
+        with self.assertRaises(mapping.MappingError):
+            mapping.validate_mapping(dict(MAIN_AND_PRICES, key={"from": ["main:ean"], "origin": "guess"}))
+
+    def test_rows_and_join_warnings(self):
+        self.assertEqual([r.row for r in self.rows], [3, 4, 5, 6, 7, 8, 9])
+        self.assertIsNone(self.rows[5].value("prices", 1))
+        unmatched = [w for w in self.join_warnings if w["code"] == "join_unmatched"][0]
+        self.assertEqual(unmatched["row"], 5)
+        self.assertIn("9999", unmatched["message"])
+        missing = [w for w in self.join_warnings if w["code"] == "join_missing"]
+        self.assertEqual([w["row"] for w in missing], [8, 9])
+        for warning in self.join_warnings:
+            self.assertEqual(sorted(warning), ["code", "field", "handle", "message", "row", "stage"])
+            self.assertIsNone(warning["field"])
+            self.assertIsNone(warning["handle"])
+            self.assertEqual(warning["stage"], "extract")
+
+    def test_warning_shape(self):
+        mapping.evaluate({"from": ["main:prix"], "transform": ["integer"]}, self.rows[0], self.sources,
+                         self.warnings, "price", handle="1001")
+        self.assertEqual(self.warnings, [{"row": 3, "handle": "1001", "code": "not_a_number", "field": "price",
+                                          "message": self.warnings[0]["message"], "stage": "extract"}])
+
+    def test_pick_join_and_split(self):
+        spec = {"from": ["main:marque", "main:matiere"], "pick": "join", "sep": " / "}
+        self.assertEqual(self.ev(spec, 0), "TOASTINE / Inox")
+        self.assertEqual(self.ev({"from": ["main:marque", "main:coloris"], "pick": "join"}, 1), "Toastine\nNoir")
+        self.assertEqual(self.ev({"from": ["main:categorie"], "transform": [{"split": "/"}]}, 0),
+                         ["Catalogue", "PEM", "Grille-pain"])
+        self.assertEqual(self.ev({"from": ["main:marque", "main:categorie"], "pick": "all",
+                                  "transform": [{"split": "/"}]}, 0),
+                         ["TOASTINE", "Catalogue", "PEM", "Grille-pain"])
+
+    def test_pick_all_deduplicates(self):
+        self.assertEqual(self.ev({"from": ["main:sku_marchand", "prices:SKU"], "pick": "all"}, 0), ["1001"])
+
+    def test_map_null_target_and_default(self):
+        spec = {"from": ["main:notice"], "map": {"Voir notice": None}, "default": "aucune"}
+        self.assertEqual(self.ev(spec, 1), "aucune")
+        self.assertEqual(self.ev(spec, 2), "aucune")
+        self.assertEqual(self.ev({"from": ["main:notice"], "map": {"Voir notice": None}}, 1), None)
+        self.assertEqual(self.ev({"from": ["main:coloris", "main:notice"], "pick": "all",
+                                  "map": {"Voir notice": None}}, 1), ["Noir"])
+
+    def test_numbers_compared_as_numbers(self):
+        sources, rows, _ = csv_workspace(self, "a;b\n29.9;29,90\n29.9;29,80\n")
+        spec = {"from": ["main:a", "main:b"], "transform": ["decimal"]}
+        warnings = []
+        self.assertEqual(mapping.evaluate(spec, rows[0], sources, warnings, "price"), "29.9")
+        self.assertEqual(warnings, [])
+        mapping.evaluate(spec, rows[1], sources, warnings, "price")
+        self.assertEqual([w["code"] for w in warnings], ["conflict"])
+
+    def test_strip_html_cleaning_counted_for_the_kept_value_only(self):
+        sources, rows, cleaner = csv_workspace(self, "a\tb\n<p>l&rsquo;eau</p>\t<p>l&rsquo;air &hellip;</p>\n")
+        warnings = []
+        spec = {"from": ["main:a", "main:b"], "transform": ["strip_html"]}
+        self.assertEqual(mapping.evaluate(spec, rows[0], sources, warnings, "description"), "l'eau")
+        self.assertEqual([w["code"] for w in warnings], ["conflict"])
+        self.assertEqual(cleaner.counts, {"apostrophe": 1})
+
+    def test_conflict_after_map(self):
+        spec = {"from": ["main:matiere", "main:coloris"], "map": {"Noir": "Inox"}}
+        self.assertEqual(self.ev(spec, 4), "Inox")
+        self.assertEqual(self.warnings, [])
+
+    def test_cells_cleaned_once_and_only_when_read(self):
+        self.assertEqual(self.cleaner.counts, {})
+        spec = {"from": ["main:accroche"]}
+        self.assertEqual(self.ev(spec, 1), 'Grille-pain 4 fentes "Stop Eject"')
+        after_first = dict(self.cleaner.counts)
+        self.assertEqual(after_first.get("quote"), 2)
+        self.ev(spec, 1)
+        self.assertEqual(self.cleaner.counts, after_first)
+
+    def test_unknown_source_in_reference(self):
+        with self.assertRaises(mapping.MappingError):
+            self.ev({"from": ["other:sku"]})
+
+
+class ColumnTest(unittest.TestCase):
+    def source(self, rows, header_rows=1):
+        self.cleaner = clean.Cleaner()
+        return mapping.LoadedSource("x", Table("t.csv", "csv", rows), header_rows, self.cleaner)
+
+    def test_ambiguous_label_suggests_letters(self):
+        source = self.source([["Prix", "Prix", "EAN"], ["1", "2", "3"]])
+        with self.assertRaises(mapping.MappingError) as ctx:
+            source.column("Prix")
+        self.assertIn("@A", str(ctx.exception))
+        self.assertIn("@B", str(ctx.exception))
+        self.assertEqual(source.column("@B"), 1)
+        self.assertEqual(source.column("EAN"), 2)
+
+    def test_code_before_label_and_headers_not_counted(self):
+        source = self.source([["prix", "Prix TTC"], ["tarif", "prix"], ["1", "2"]], header_rows=2)
+        self.assertEqual(source.column("prix"), 1)
+        self.assertEqual(source.column("Prix TTC"), 1)
+        self.assertEqual(self.cleaner.counts, {})
+
+    def test_letter_out_of_range(self):
+        with self.assertRaises(mapping.MappingError):
+            self.source([["a", "b"], ["1", "2"]]).column("@Z")
+
+
+class TransformTest(unittest.TestCase):
+    def test_decimal_and_integer(self):
+        self.assertEqual(mapping.apply_transform("1 299,90 €", "decimal"), "1299.90")
+        self.assertEqual(mapping.apply_transform("20 %", "decimal"), "20")
+        self.assertEqual(mapping.apply_transform("12 EUR", "decimal"), "12")
+        self.assertEqual(mapping.apply_transform("6.0", "integer"), "6")
+        warnings = []
+        self.assertIsNone(mapping.apply_transform("6.5", "integer", warnings, "qty"))
+        self.assertIsNone(mapping.apply_transform("1.234,5", "decimal", warnings, "qty"))
+        self.assertEqual([w["code"] for w in warnings], ["not_a_number", "not_a_number"])
+        self.assertEqual(warnings[0]["field"], "qty")
+
+    def test_boolean(self):
+        step = {"boolean": ["yes", "no"]}
+        self.assertEqual(mapping.apply_transform("X", step), "yes")
+        self.assertEqual(mapping.apply_transform("Faux", step), "no")
+        warnings = []
+        self.assertIsNone(mapping.apply_transform("peut-être", step, warnings))
+        self.assertEqual(warnings[0]["code"], "not_a_boolean")
+
+    def test_scale_above(self):
+        warnings = []
+        self.assertEqual(mapping.apply_transform("1500", {"scale_above": [100, 1000]}, warnings), "1.5")
+        self.assertEqual(mapping.apply_transform("2000", {"scale_above": [100, 1000]}), "2")
+        self.assertEqual(mapping.apply_transform("2.10", {"scale_above": [100, 1000]}), "2.10")
+        self.assertEqual([w["code"] for w in warnings], ["scaled"])
+
+    def test_regex(self):
+        self.assertEqual(mapping.apply_transform("Ref 22/6", {"regex": r"\d+/\d+"}), "22/6")
+        warnings = []
+        self.assertIsNone(mapping.apply_transform("abc", {"regex": r"(\d+)"}, warnings))
+        self.assertEqual(warnings[0]["code"], "no_match")
+
+    def test_strip_html(self):
+        html = "<p>Grille-pain&nbsp;2 fentes.<br/>Mati&egrave;re : Inox.</p><ul><li> A </li><li>B</li></ul>"
+        self.assertEqual(mapping.apply_transform(html, "strip_html"), "Grille-pain 2 fentes.\nMatière : Inox.\nA\nB")
+        self.assertEqual(mapping.apply_transform("<p>l&rsquo;eau &laquo;chaude&raquo;&hellip;</p>", "strip_html"),
+                         'l\'eau "chaude"...')
+
+    def test_strip_html_cleaning_is_counted(self):
+        cleaner = clean.Cleaner()
+        self.assertEqual(mapping.apply_transform("l&rsquo;eau", "strip_html", cleaner=cleaner), "l'eau")
+        self.assertEqual(cleaner.counts, {"apostrophe": 1})
+
+    def test_text_to_html_escapes_and_trims(self):
+        self.assertEqual(mapping.apply_transform("<b>\n\n\n x \n", "text_to_html"), "<p>&lt;b&gt;</p><p>x</p>")
+
+
+class ValidateTest(unittest.TestCase):
+    def assertRejected(self, **changes):
+        with self.assertRaises(mapping.MappingError):
+            mapping.validate_mapping(dict(MAIN_AND_PRICES, **changes))
+
+    def test_valid_mapping(self):
+        self.assertIs(mapping.validate_mapping(MAIN_AND_PRICES), MAIN_AND_PRICES)
+
+    def test_rejections(self):
+        self.assertRejected(version=2)
+        self.assertRejected(concept="")
+        self.assertRejected(sources={"a": {"file": "a.csv"}, "b": {"file": "b.csv"}})
+        self.assertRejected(key={"from": ["main:ean"], "transform": ["tranform"]})
+        self.assertRejected(key={"from": ["main:ean"], "transform": [{"scale_above": 100}]})
+        self.assertRejected(key={"from": ["main:ean"], "transform": [{"regex": "("}]})
+        self.assertRejected(key={"from": ["ean"]})
+        self.assertRejected(key={"from": ["nowhere:ean"]})
+        self.assertRejected(key={"from": ["main:ean"], "pick": "last"})
+        self.assertRejected(key={"from": ["main:ean"], "value": "x"})
+        self.assertRejected(group={"key": {"from": ["main:ref_com"]}, "origin": "guess"})
+
+    def test_unknown_spec_key_is_named(self):
+        for typo in ("transfrom", "map_ignore_cases"):
+            with self.assertRaises(mapping.MappingError) as error:
+                mapping.validate_mapping(dict(MAIN_AND_PRICES, key={"from": ["main:ean"], typo: True}))
+            self.assertIn("'%s'" % typo, str(error.exception))
+            self.assertIn("key", str(error.exception))
+
+    def test_spec_holds_exactly_one_of_from_and_value(self):
+        self.assertRejected(key={"map": {"a": "b"}, "transform": ["decimal"]})
+        self.assertRejected(key={"value": {"nested": 1}, "default": "x"})
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec({"pick": "first"}, ["main"], "x")
+
+    def test_spec_keys_are_extensible(self):
+        self.assertIn("map_ignore_case", mapping.SPEC_KEYS)
+        spec = {"from": ["main:ean"], "label": "EAN"}
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec(spec, ["main"], "x")
+        mapping.check_spec(spec, ["main"], "x", extra_keys=("label",))
+        self.assertRejected(key=spec)
+        mapping.validate_mapping(dict(MAIN_AND_PRICES, key=spec), extra_keys=("label",))
+        self.assertIn("generate", mapping.CONCEPT_SPEC_KEYS["products"])
+        generate = {"from": ["main:descriptif"], "generate": {"features": []}}
+        mapping.validate_mapping(dict(MAIN_AND_PRICES, product={"description_html": generate}))
+        with self.assertRaises(mapping.MappingError):
+            mapping.validate_mapping(dict(MAIN_AND_PRICES, concept="taxonomy", key=generate))
+
+    def test_options_entries_hold_specs(self):
+        options = [{"name": "Couleur", "value": {"from": ["main:coloris"], "transform": ["nope"]}}]
+        self.assertRejected(options=options)
+        options[0]["value"]["transform"] = []
+        mapping.validate_mapping(dict(MAIN_AND_PRICES, options=options))
+
+    def test_load_mapping_reads_utf8(self):
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        path = os.path.join(tmp.name, "products.json")
+        data = dict(MAIN_AND_PRICES, key={"from": ["main:ean"], "origin": "agent", "reason": "Référence"})
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(data, f, ensure_ascii=False)
+        self.assertEqual(mapping.load_mapping(path)["key"]["reason"], "Référence")
+
+
+class SuffixTest(unittest.TestCase):
+    def setUp(self):
+        self.sources, self.rows, self.cleaner = csv_workspace(
+            self, "p;q;l;n\n1400;1400,0;A / B;\n;;;x\n1,5;1.6;;\n")
+        self.warnings = []
+
+    def ev(self, spec, index=0):
+        return mapping.evaluate(spec, self.rows[index], self.sources, self.warnings, "test")
+
+    def test_suffix_on_a_scalar_after_the_transform(self):
+        self.assertIn("suffix", mapping.SPEC_KEYS)
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": " W"}), "1400 W")
+        self.assertEqual(self.ev({"from": ["main:p"], "transform": ["decimal"], "suffix": " kg"}, 2), "1.5 kg")
+
+    def test_suffix_on_each_element_of_a_list(self):
+        self.assertEqual(self.ev({"from": ["main:l"], "transform": [{"split": "/"}], "suffix": " cm"}),
+                         ["A cm", "B cm"])
+
+    def test_default_is_not_suffixed(self):
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": " W", "default": "inconnue"}, 1), "inconnue")
+        self.assertIsNone(self.ev({"from": ["main:p"], "suffix": " W"}, 1))
+
+    def test_suffix_is_cleaned(self):
+        self.assertEqual(self.ev({"from": ["main:p"], "suffix": "\u00a0W\u2026"}), "1400 W...")
+        self.assertEqual(self.cleaner.counts, {"nbsp": 1, "ellipsis": 1})
+
+    def test_conflicts_compare_values_before_the_suffix(self):
+        spec = {"from": ["main:p", "main:q"], "transform": ["decimal"], "suffix": " W"}
+        self.assertEqual(self.ev(spec), "1400 W")
+        self.assertEqual(self.warnings, [])
+        self.assertEqual(self.ev(spec, 2), "1.5 W")
+        self.assertEqual([w["code"] for w in self.warnings], ["conflict"])
+
+    def test_suffix_must_be_a_string(self):
+        with self.assertRaises(mapping.MappingError):
+            mapping.check_spec({"from": ["main:p"], "suffix": 1}, ["main"], "x")
+
+    def test_attribute_option_source_is_the_cell_before_the_suffix(self):
+        spec = {"from": ["main:p"], "suffix": " W"}
+        self.assertEqual(taxonomy.attribute_values(spec, "h", self.rows[:1], "attributes.puissance", self.sources,
+                                                   [], self.cleaner), [("1400 W", "1400")])
+
+
+class ColumnTransformTest(unittest.TestCase):
+    HTML_AND_TEXT = {"from": ["main:html", {"column": "main:texte", "transform": ["text_to_html"]}],
+                     "pick": "join", "sep": ""}
+
+    def setUp(self):
+        self.sources, self.rows, self.cleaner = csv_workspace(
+            self, 'html\ttexte\tn\n<p>Intro</p>\t"Puissance <1400 W> & plus\n\nGarantie 2 ans"\tabc\n'
+                  '\tSans intro\t12\n')
+        self.warnings = []
+
+    def ev(self, spec, index=0):
+        return mapping.evaluate(spec, self.rows[index], self.sources, self.warnings, "test")
+
+    def test_text_to_html_joined_after_html(self):
+        self.assertEqual(self.ev(self.HTML_AND_TEXT),
+                         "<p>Intro</p><p>Puissance &lt;1400 W&gt; &amp; plus</p><p>Garantie 2 ans</p>")
+        self.assertEqual(self.ev(self.HTML_AND_TEXT, 1), "<p>Sans intro</p>")
+        self.assertEqual(self.warnings, [])
+
+    def test_column_steps_run_before_the_spec_steps(self):
+        spec = {"from": [{"column": "main:n", "transform": ["integer"]}], "transform": [{"scale_above": [10, 4]}]}
+        self.assertEqual(self.ev(spec, 1), "3")
+        self.assertIsNone(self.ev(spec, 0))
+        self.assertIn("not_a_number", [w["code"] for w in self.warnings])
+
+    def test_an_empty_column_result_gives_way_to_the_next_column(self):
+        spec = {"from": [{"column": "main:n", "transform": ["integer"]}, "main:texte"]}
+        self.assertEqual(self.ev(spec), "Puissance <1400 W> & plus\n\nGarantie 2 ans")
+
+    def test_validation(self):
+        ok = {"from": [{"column": "main:a", "transform": ["text_to_html"]}, {"column": "main:b"}]}
+        mapping.check_spec(ok, ["main"], "x")
+        bad = [{"column": "main:a", "transforms": []}, {"transform": ["text_to_html"]}, {"column": "a"},
+               {"column": "nowhere:a"}, {"column": "main:a", "transform": ["nope"]},
+               {"column": "main:a", "transform": "text_to_html"}, 3]
+        for entry in bad:
+            with self.assertRaises(mapping.MappingError):
+                mapping.check_spec({"from": [entry]}, ["main"], "x")
+        with self.assertRaises(mapping.MappingError) as error:
+            mapping.check_spec({"from": [bad[0]]}, ["main"], "product.title")
+        self.assertIn("'transforms'", str(error.exception))
+        self.assertIn("product.title", str(error.exception))
+
+    def test_refs_and_loading(self):
+        self.assertEqual(mapping.from_ref({"column": "main:a", "transform": []}), "main:a")
+        self.assertEqual(mapping.from_ref("main:a"), "main:a")
+        self.assertEqual(mapping.mapping_refs({"description_html": self.HTML_AND_TEXT}), ["main:html", "main:texte"])
+        directory = make_workspace(self)
+        bad = dict(MAIN_AND_PRICES, product={"title": {"from": [{"column": "main:nope"}]}})
+        with self.assertRaises(mapping.MappingError):
+            mapping.load_sources(directory, bad, clean.Cleaner())
+
+    def test_split_in_a_column_step_is_a_list(self):
+        with self.assertRaises(mapping.MappingError):
+            extract.check_single({"from": [{"column": "main:a", "transform": [{"split": "/"}]}]}, "product.title")
+
+    def test_columns_referenced_reads_the_object_form(self):
+        directory = make_workspace(self)
+        m = dict(MAIN_AND_PRICES, product={"title": {"from": [{"column": "main:accroche",
+                                                                "transform": ["text_to_html"]}]}})
+        loaded = mapping.load_sources(directory, m, clean.Cleaner())
+        self.assertEqual(columns.referenced(m, loaded),
+                         {mapping.resolve(ref, loaded) for ref in ("main:sku_marchand", "main:accroche", "prices:SKU")})
+
+    def test_client_review_labels_the_object_form(self):
+        inventory = {"files": [{"file": "n.csv", "sheets": [{"sheet": "csv", "columns": [
+            {"letter": "A", "code": "html", "label": "Descriptif"},
+            {"letter": "B", "code": "texte", "label": "Fiche"}]}]}]}
+        choice = {"concept": "products", "reason": "Fiche ajoutée au descriptif.", "spec": self.HTML_AND_TEXT}
+        sources = {"main": {"file": "n.csv"}}
+        self.assertEqual(client_review.choice_text(choice, sources, inventory, {"column": "colonne"}),
+                         'Fiche ajoutée au descriptif. (colonne "Descriptif", "Fiche")')
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -13,7 +13,8 @@ Module fields come from machine-readable decisions: `taxonomy` as written by tax
 `attribute_option:<code>:<value>`), and `metafields` as
 {"definitions": {"<namespace.key>": {"type": "<flowkiwi type>", "name": "...", "transform": null,
 "source": "<shopify namespace.key, when renamed>"}}}
-with transform null (value as is), list_json, list, number, json or strip_html.
+with transform null (value as is), list_json, list, number (a string: the MCP only accepts a string metafield
+value), json or strip_html.
 """
 
 import argparse
@@ -23,6 +24,7 @@ import os
 import re
 import sys
 import unicodedata
+from decimal import Decimal, InvalidOperation
 
 STATUSES = {"active": "ACTIVE", "draft": "DRAFT", "archived": "ARCHIVED"}
 MARKER_KEY = "metafield_definition:shopify.handle"
@@ -149,6 +151,18 @@ def _list_values(value):
     return [v.strip() for v in re.split(r"[;\n]", value) if v.strip()]
 
 
+def _number_text(value):
+    """The number as a string (the MCP only accepts a string metafield value): decimal comma read as a dot,
+    no trailing zero, no exponent ("18,40" -> "18.4", "6.0" -> "6")."""
+    try:
+        number = Decimal(str(value).strip().replace(",", "."))
+    except InvalidOperation:
+        raise PayloadError(f"value {value!r} is not a number")
+    if not number.is_finite():
+        raise PayloadError(f"value {value!r} is not a number")
+    return "0" if number.is_zero() else format(number.normalize(), "f")
+
+
 def transform_value(value, transform):
     if transform not in TRANSFORMS:
         raise PayloadError(f"unknown metafield transform '{transform}', use one of {TRANSFORMS}")
@@ -157,11 +171,7 @@ def transform_value(value, transform):
     if transform == "list":
         return _list_values(value)
     if transform == "number":
-        number = value.strip().replace(",", ".")
-        try:
-            return int(number) if re.match(r"^-?\d+$", number) else float(number)
-        except ValueError:
-            raise PayloadError(f"value {value!r} is not a number")
+        return _number_text(value)
     if transform == "json":
         try:
             return json.loads(value)
