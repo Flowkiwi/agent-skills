@@ -13,9 +13,9 @@ invalid.
 
 The Concepts section also warns, without blocking, when `product.vendor` reads a column that a metaobject field
 reads with a `map` and vendor has no equivalent map (`vendor reads <column> without the map applied to metaobject
-<type>.<field>`): the brand names may differ between the vendor and the metaobject entries. It also warns when the
-metaobjects decision has `reference_validation` true while mappings/metaobjects.json leaves it out (default false):
-a concept extracted when the default was true, to extract and record again.
+<type>.<field>`): the brand names may differ between the vendor and the metaobject entries. It also warns when
+mappings/metaobjects.json still has the legacy `reference_validation` key (ignored), and when a reference metafield
+definition was created without its target metaobject definition (its update is in plan_shared.py --changes).
 
 The `MCP effort` line estimates the MCP calls after approval (shared elements, products to create, updates of a
 later phase) and their time, at about 8 s per call.
@@ -384,21 +384,29 @@ def vendor_map_warnings(directory: str) -> List[str]:
 
 
 def reference_validation_warnings(directory: str, state: dict) -> List[str]:
-    """Non blocking: the metaobjects decision still has reference_validation true from an extract made when it
-    defaulted to true, while the mapping leaves it out (now false)."""
-    decision = (state.get("decisions") or {}).get("metaobjects")
-    if not isinstance(decision, dict) or decision.get("reference_validation") is not True:
-        return []
+    """Non blocking: the legacy reference_validation key left in the mapping, and the reference metafield
+    definitions created without their target (spec without `target`, from when reference_validation was false)."""
+    lines = []
     try:
         m = read_json(os.path.join(directory, "mappings", "metaobjects.json"))
     except (OSError, ValueError):
-        return []
-    if not isinstance(m, dict) or "reference_validation" in m:
-        return []
-    meta = (state.get("decision_meta") or {}).get("metaobjects") or {}
-    return ["    decision metaobjects has reference_validation true while mappings/metaobjects.json leaves it out "
-            "(default false): run extract.py %s metaobjects again, then %s" % (
-                shlex.quote(directory), decide_command(directory, "metaobjects", meta))]
+        m = None
+    if isinstance(m, dict) and "reference_validation" in m:
+        lines.append("    mappings/metaobjects.json has reference_validation, now ignored (a reference metafield "
+                     "definition always carries its target): remove it")
+    decision = (state.get("decisions") or {}).get("metaobjects")
+    references = set()
+    definitions = decision.get("definitions") if isinstance(decision, dict) else None
+    for definition in definitions or []:
+        if isinstance(definition, dict) and (definition.get("reference") or {}).get("metafield"):
+            references.add("metafield_definition:" + definition["reference"]["metafield"])
+    for key, shared in sorted((state.get("shared") or {}).items()):
+        if key not in references or not isinstance(shared, dict) or shared.get("status") != "created":
+            continue
+        if not (shared.get("spec") or {}).get("target"):
+            lines.append("    %s was created without its target metaobject definition: apply its update from "
+                         "plan_shared.py %s --changes (references/phases.md step 10)" % (key, shlex.quote(directory)))
+    return lines
 
 
 def concepts_section(files, products, directory: Optional[str] = None, state: Optional[dict] = None) -> List[str]:

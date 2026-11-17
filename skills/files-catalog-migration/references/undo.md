@@ -34,7 +34,7 @@ Purchase offers, suppliers and channels are not created by this version; every o
 - Deleting a **product** is refused with 409 `product.cannot_delete_with_variants` while it has variants. Once its variants are gone, deleting it also deletes its options, option values and metafields (the `import.key` marker included).
 - So, for a product in the plan: delete its variants, then the product, and record **all** its items as deleted (offers, metafields, options, option values included).
 - A 404 on a later step means the item already went with its parent: count it as deleted.
-- Metaobjects (`references/metaobjects.md`): the reference metafields go with the products, then the entries (an entry referencing another before its target), the reference metafield definitions and last the metaobject definitions. A 409 on a definition still used (entries or a metafield definition created outside this migration) is reported, not forced.
+- Metaobjects (`references/metaobjects.md`): the reference metafields go with the products, then the entries (an entry referencing another before its target), the reference metafield definitions and last the metaobject definitions (a metaobject definition is the target of the reference definitions: with `shared:<key>`, undo them first). A 409 on a definition still used (entries or a metafield definition created outside this migration) is reported, not forced.
 
 ## Procedure
 

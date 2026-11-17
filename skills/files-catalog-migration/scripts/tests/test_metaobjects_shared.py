@@ -51,7 +51,7 @@ class MetaobjectsSharedTest(ConceptTestCase):
                                 "metaobject:marque:l-atelier-pain", "metaobject:marque:brioche-co", "metafield_definition:custom.marque"])
         self.assertEqual(entries[2]["body"], {"definition": "<metaobject_definition:marque IRI>", "handle": "toastine",
                                               "fields": [{"key": "nom", "value": "Toastine"}], "status": "ACTIVE"})
-        self.assertEqual(entries[5]["body"]["validations"][0]["value"], "<metaobject_definition:marque IRI>")
+        self.assertEqual(entries[5]["body"]["validations"][0]["value"], ["<metaobject_definition:marque UUID>"])
         self.assertEqual(entries[5]["depends_on"], ["metaobject_definition:marque"])
         self.assertNotIn("locale", json.dumps(entries))
 
@@ -78,8 +78,9 @@ class MetaobjectsSharedTest(ConceptTestCase):
         self.assertEqual(reference["body"], {
             "namespace": "custom", "key": "marque", "name": "Marque", "ownerType": "/api/metafield_owner_types/products",
             "type": "/api/metafield_definition_types/metaobject_reference",
-            "validations": [{"name": REFERENCE_VALIDATION, "value": "<metaobject_definition:marque IRI>"}]})
-        self.assertEqual(reference["spec"], {"type": "metaobject_reference", "name": "Marque"})
+            "validations": [{"name": REFERENCE_VALIDATION, "value": ["<metaobject_definition:marque UUID>"]}]})
+        self.assertEqual(reference["spec"], {"type": "metaobject_reference", "name": "Marque", "target": "marque"})
+        self.assertEqual(reference["depends_on"], ["metaobject_definition:marque"])
         self.assertEqual(reference["lookup"], "list_metafield_definitions with ownerType products (every page), "
                                               "then filter namespace 'custom' and key 'marque' client side")
 
@@ -92,10 +93,44 @@ class MetaobjectsSharedTest(ConceptTestCase):
         self.assertEqual(entries[1]["depends_on"], [])
         self.assertEqual(entries[-1]["depends_on"], [])
 
-    def test_without_validation(self):
+    def test_validation_target_is_the_bare_definition_uuid(self):
+        state.record_shared(self.st, "metaobject_definition:marque", fake_iri("metaobject_definition:marque"),
+                            "created", "metaobjects")
+        reference = plan_shared.plan(self.st)[-1]
+        self.assertEqual(reference["body"]["validations"], [{"name": REFERENCE_VALIDATION, "value": [
+            fake_iri("metaobject_definition:marque").rsplit("/", 1)[1]]}])
+        self.assertEqual(reference["depends_on"], [])
+
+    def test_validation_target_needs_an_iri_ending_with_a_uuid(self):
+        state.record_shared(self.st, "metaobject_definition:marque", "/api/metaobject_definitions/marque",
+                            "created", "metaobjects")
+        with self.assertRaises(payload.PayloadError):
+            plan_shared.plan(self.st)
+
+    def test_legacy_reference_validation_false_is_ignored(self):
         self.st["decisions"]["metaobjects"]["reference_validation"] = False
-        self.assertNotIn("validations", plan_shared.plan(self.st)[-1]["body"])
-        self.assertEqual(plan_shared.plan(self.st)[-1]["depends_on"], [])
+        self.assertEqual(plan_shared.plan(self.st)[-1]["body"]["validations"][0]["value"],
+                         ["<metaobject_definition:marque UUID>"])
+
+    def test_reference_definition_created_without_target_gets_its_validations(self):
+        self.record_all_shared(self.st)
+        self.st["shared"]["metafield_definition:custom.marque"]["spec"] = {"type": "metaobject_reference",
+                                                                          "name": "Marque"}
+        found = plan_shared.changes(self.st)
+        self.assertEqual(found["destructive"], [])
+        (update,) = found["updates"]
+        self.assertEqual(update["key"], "metafield_definition:custom.marque")
+        self.assertEqual(update["operation"], "update_metafield_definition")
+        self.assertEqual(update["body"], {"validations": [{"name": REFERENCE_VALIDATION, "value": [
+            fake_iri("metaobject_definition:marque").rsplit("/", 1)[1]]}]})
+        self.assertEqual(update["spec"]["target"], "marque")
+
+    def test_reference_definition_with_another_target_is_destructive(self):
+        self.record_all_shared(self.st)
+        self.st["shared"]["metafield_definition:custom.marque"]["spec"]["target"] = "pays"
+        (change,) = plan_shared.changes(self.st)["destructive"]
+        self.assertEqual(change["key"], "metafield_definition:custom.marque")
+        self.assertEqual(change["reason"], "target pays -> marque")
 
     def test_reference_fields_between_definitions(self):
         st = self.state_with_decision("metaobjects", self.extract_with(with_pays(FIXTURE)))
@@ -106,12 +141,12 @@ class MetaobjectsSharedTest(ConceptTestCase):
         marque = entries["metaobject_definition:marque"]
         self.assertEqual(marque["body"]["fieldDefinitions"][1], {
             "key": "pays", "name": "Pays", "type": "/api/metafield_definition_types/metaobject_reference",
-            "validations": [{"name": REFERENCE_VALIDATION, "value": "<metaobject_definition:pays IRI>"}]})
+            "validations": [{"name": REFERENCE_VALIDATION, "value": ["<metaobject_definition:pays UUID>"]}]})
         self.assertEqual(marque["depends_on"], ["metaobject_definition:pays"])
         self.assertEqual(marque["spec"]["fields"], {"nom": "single_line_text_field", "pays": "metaobject_reference"})
         toastine = entries["metaobject:marque:toastine"]
         self.assertEqual(toastine["body"]["fields"], [{"key": "nom", "value": "Toastine"},
-                                                      {"key": "pays", "value": "<metaobject:pays:argente IRI>"}])
+                                                      {"key": "pays", "value": "<metaobject:pays:argente UUID>"}])
         self.assertEqual(toastine["depends_on"], ["metaobject_definition:marque", "metaobject:pays:argente"])
         self.assertEqual(entries["metaobject:pays:noir"]["body"]["status"], "DRAFT")
 
@@ -123,7 +158,8 @@ class MetaobjectsSharedTest(ConceptTestCase):
         st = self.state_with_decision("metaobjects", self.extract_with(spec))
         state.record_shared(st, "metaobject:pays:argente", fake_iri("metaobject:pays:argente"), "created", "metaobjects")
         toastine = [e for e in plan_shared.plan(st) if e["key"] == "metaobject:marque:toastine"][0]
-        self.assertEqual(json.loads(toastine["body"]["fields"][1]["value"]), [fake_iri("metaobject:pays:argente")])
+        self.assertEqual(json.loads(toastine["body"]["fields"][1]["value"]),
+                         [fake_iri("metaobject:pays:argente").rsplit("/", 1)[1]])
 
     def test_metafields_and_reference_on_the_same_key(self):
         state.decide(self.st, "metafields", {"definitions": {"custom.marque": {
@@ -150,22 +186,14 @@ class MetaobjectsSharedTest(ConceptTestCase):
             with self.assertRaises(payload.PayloadError):
                 payload.build(self.products(), self.st, "1004", placeholders=placeholders)
 
-    def test_reference_validation_is_false_by_default(self):
-        spec = copy.deepcopy(FIXTURE)
-        del spec["reference_validation"]
-        st = self.state_with_decision("metaobjects", self.extract_with(spec))
-        self.assertIs(st["decisions"]["metaobjects"]["reference_validation"], False)
-        self.assertNotIn("validations", plan_shared.plan(st)[-1]["body"])
-        del st["decisions"]["metaobjects"]["reference_validation"]
-        self.assertNotIn("validations", plan_shared.plan(st)[-1]["body"])
-
-    def test_reference_fields_inside_definitions_keep_their_validation(self):
-        spec = with_pays(FIXTURE)
-        del spec["reference_validation"]
-        st = self.state_with_decision("metaobjects", self.extract_with(spec))
+    def test_reference_fields_inside_definitions_carry_their_target(self):
+        st = self.state_with_decision("metaobjects", self.extract_with(with_pays(FIXTURE)))
+        state.record_shared(st, "metaobject_definition:pays", fake_iri("metaobject_definition:pays"),
+                            "created", "metaobjects")
         marque = next(e for e in plan_shared.plan(st) if e["key"] == "metaobject_definition:marque")
-        self.assertEqual(marque["body"]["fieldDefinitions"][1]["validations"],
-                         [{"name": REFERENCE_VALIDATION, "value": "<metaobject_definition:pays IRI>"}])
+        self.assertEqual(marque["body"]["fieldDefinitions"][1]["validations"], [{"name": REFERENCE_VALIDATION, "value": [
+            fake_iri("metaobject_definition:pays").rsplit("/", 1)[1]]}])
+        self.assertEqual(marque["depends_on"], [])
 
     def test_product_reference_after_metafields(self):
         state.decide(self.st, "metafields", {"definitions": {"custom.poids": {
