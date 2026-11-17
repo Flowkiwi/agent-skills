@@ -14,8 +14,7 @@ import metaobjects  # noqa: E402
 from concept_helpers import ConceptTestCase, fixture  # noqa: E402
 
 FIXTURE = fixture("mapping-metaobjects.json")
-DECISION = {"reference_validation": True,
-            "definitions": [{"type": "marque", "name": "Marque", "displayNameField": "nom", "status": "ACTIVE",
+DECISION = {"definitions": [{"type": "marque", "name": "Marque", "displayNameField": "nom", "status": "ACTIVE",
                              "fields": [{"key": "nom", "name": "Nom", "type": "single_line_text_field",
                                          "required": True}],
                              "reference": {"metafield": "custom.marque", "name": "Marque"}}],
@@ -70,7 +69,7 @@ class MetaobjectsTest(ConceptTestCase):
     def test_decision_format(self):
         m, _ = self.extract_with(FIXTURE)
         self.assertEqual(m["definitions"], DECISION["definitions"])
-        self.assertEqual(m["reference_validation"], True)
+        self.assertNotIn("reference_validation", m)
         self.assertEqual(m["entries"][0], DECISION["entries"][0])
         self.assertEqual(m["values"]["2226"], DECISION["values"]["2226"])
         self.assertEqual(sorted(m), sorted(list(DECISION) + ["provenance"]))
@@ -103,11 +102,12 @@ class MetaobjectsTest(ConceptTestCase):
                           (("definitions", 0, "fields", 0, "type"), "metaobject_reference"),
                           (("definitions", 0, "reference", "metafield"), "custom-marque"),
                           (("definitions", 0, "reference", "metafield"), "import.key"),
-                          (("definitions", 0, "locale"), "fr"), (("reference_validation",), "yes")):
+                          (("definitions", 0, "locale"), "fr")):
             spec = set_path(copy.deepcopy(FIXTURE), path, bad)
             with self.assertRaises(mapping.MappingError, msg=repr((path, bad))):
                 metaobjects.validate(spec)
         metaobjects.validate(copy.deepcopy(FIXTURE))
+        metaobjects.validate(dict(copy.deepcopy(FIXTURE), reference_validation=False))  # legacy key, ignored
         metaobjects.validate(with_origin_definition(FIXTURE))
 
     def test_reference_target_defined_earlier(self):

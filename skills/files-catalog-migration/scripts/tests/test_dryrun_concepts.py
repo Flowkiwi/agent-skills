@@ -110,37 +110,35 @@ class DryRunConceptsTest(unittest.TestCase):
         text, _ = dryrun.report(self.dir)
         self.assertNotIn("vendor reads", text)
 
-    def old_reference_validation(self):
-        """A workspace extracted when reference_validation defaulted to true: the mapping leaves it out."""
-        self.edit_mapping("metaobjects", lambda m: m.pop("reference_validation"))
+    def test_legacy_reference_validation_in_the_mapping_warns_without_blocking(self):
+        text, _ = dryrun.report(self.dir)
+        self.assertNotIn("reference_validation", text)
+        self.edit_mapping("metaobjects", lambda m: m.update(reference_validation=False))
         run("extract.py", self.dir, "metaobjects")
-        path = os.path.join(self.dir, "concepts", "metaobjects.json")
-        concept = read_json(path)
-        concept["reference_validation"] = True
-        with open(path, "w", encoding="utf-8") as f:
-            json.dump(concept, f, ensure_ascii=False)
-        self.decide("metaobjects", origin=("--origin", "agent", "--reason", "Une fiche par marque."))
-
-    def test_reference_validation_left_from_an_old_extract_warns_without_blocking(self):
-        self.old_reference_validation()
+        self.decide("metaobjects")
         text, code = dryrun.report(self.dir)
         self.assertEqual(code, 0, text)
         concepts = text[text.index("Concepts:"):text.index("Blocking:")].splitlines()
-        line = next(l for l in concepts if "reference_validation" in l)
-        self.assertTrue(line.startswith("    decision metaobjects has reference_validation true while "
-                                        "mappings/metaobjects.json leaves it out (default false):"), line)
-        self.assertIn("extract.py %s metaobjects" % self.dir, line)
-        self.assertIn("state.py decide %s --key metaobjects" % self.dir, line)
-        self.assertIn("--origin agent --reason", line)
+        self.assertIn("    mappings/metaobjects.json has reference_validation, now ignored (a reference metafield "
+                      "definition always carries its target): remove it", concepts)
 
-    def test_reference_validation_set_in_the_mapping_or_false_does_not_warn(self):
+    def test_reference_definition_created_without_target_warns(self):
+        path = os.path.join(self.dir, "state.json")
+        st = read_json(path)
+        key = "metafield_definition:custom.marque"
+        st["shared"][key] = {"iri": "/api/metafield_definitions/00000000-0000-4000-8000-000000000001",
+                             "status": "created", "module": "metaobjects",
+                             "spec": {"type": "metaobject_reference", "name": "Marque"}}
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
+        text, code = dryrun.report(self.dir)
+        self.assertIn("    %s was created without its target metaobject definition: apply its update from "
+                      "plan_shared.py %s --changes" % (key, self.dir), text)
+        st["shared"][key]["spec"]["target"] = "marque"
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(st, f, ensure_ascii=False)
         text, _ = dryrun.report(self.dir)
-        self.assertNotIn("reference_validation", text)
-        self.edit_mapping("metaobjects", lambda m: m.pop("reference_validation"))
-        run("extract.py", self.dir, "metaobjects")
-        self.decide("metaobjects")
-        text, _ = dryrun.report(self.dir)
-        self.assertNotIn("reference_validation", text)
+        self.assertNotIn("created without its target", text)
 
     def test_stale_decision_blocks(self):
         self.edit_mapping("taxonomy", lambda m: m["categories"].update(drop_levels=2))

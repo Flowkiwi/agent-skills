@@ -6,16 +6,19 @@ Usage:
 
 Covers the core import.key marker definition, then (when decided) categories parents first, attribute definitions,
 attribute options, collections parents first, metaobject definitions, metaobject entries (definition order, then
-entry order), the reference metafield definitions of the metaobjects, other metafield definitions, then the taxes
+entry order), the reference metafield definitions of the metaobjects (each with its target metaobject
+definition as a validation, a one-item array of its bare UUID), other metafield definitions, then the taxes
 of the `prices` countries without a tax IRI (key `tax:<country code>:<rate>`). Keys already
 recorded `created` or `reused` in state.json are skipped. Every entry carries a `spec` (what was asked), recorded
 with the IRI to detect later drift.
-A body referencing a shared element not recorded yet holds a `<key IRI>` placeholder and lists it
+A body referencing a shared element not recorded yet holds a `<key IRI>` placeholder (`<key UUID>` where the API
+takes a bare UUID: a validation target, a reference field of an entry) and lists it
 in `depends_on`; --ready prints only the entries whose dependencies are all recorded. Other modules'
 shared elements (countries, suppliers, channels) follow their references.
 
 --changes compares the recorded specs with the current plan (a later phase): destructive changes (with the
-created products that use them), updates of elements created by this migration, `unmanaged` keys (reused,
+created products that use them), updates of elements created by this migration (a reference metafield definition
+recorded without `target` in its spec gets its `validations`), `unmanaged` keys (reused,
 never modified) and `unknown` ones (recorded without spec). Exit 1 while a destructive key is not in the
 decision `confirmed_changes` of the current phase (`{"phase": <n>, "keys": [...]}`).
 """
@@ -27,7 +30,7 @@ import os
 import sys
 from decimal import ROUND_HALF_UP, Decimal
 
-from payload import MARKER_KEY, UUID_SEGMENT, PayloadError, dumps, shared_iri
+from payload import MARKER_KEY, UUID_SEGMENT, PayloadError, dumps, shared_iri, shared_uuid
 from state import phase_decision
 
 OWNER_TYPE = "/api/metafield_owner_types/products"
@@ -53,15 +56,24 @@ def _iri(state, key, depends_on):
     return shared_iri(state, key, placeholders=True)
 
 
+def _uuid(state, key, depends_on):
+    if not _recorded(state, key) and key not in depends_on:
+        depends_on.append(key)
+    return shared_uuid(state, key, placeholders=True)
+
+
 def _metaobject_validation(state, kind, depends_on):
-    return [{"name": METAOBJECT_VALIDATION, "value": _iri(state, f"metaobject_definition:{kind}", depends_on)}]
+    """The one target of a reference definition: a one-item array holding the bare UUID of the metaobject
+    definition (the API refuses an IRI and, for the reference types, a definition without it)."""
+    return [{"name": METAOBJECT_VALIDATION, "value": [_uuid(state, f"metaobject_definition:{kind}", depends_on)]}]
 
 
 def _metaobject_field_value(state, field, value, depends_on):
-    """Entry field value as sent: text as is, references as entry IRIs, lists as a JSON array string."""
+    """Entry field value as sent, always a string: text as is, references as bare entry UUIDs (the API refuses
+    the IRI), lists as a JSON array string."""
     if field.get("target"):
         items = value if isinstance(value, list) else [value]
-        value = [_iri(state, f"metaobject:{field['target']}:{item}", depends_on) for item in items]
+        value = [_uuid(state, f"metaobject:{field['target']}:{item}", depends_on) for item in items]
         if field["type"] == "metaobject_reference":
             return value[0]
     if isinstance(value, list):
@@ -196,11 +208,11 @@ def plan(state, metafield_columns=None, include_recorded=False):
             namespace_key = reference["metafield"]
             depends_on = []
             body = _metafield_definition(namespace_key, reference["name"], "metaobject_reference")
-            if metaobjects.get("reference_validation", False) is True:
-                body["validations"] = _metaobject_validation(state, definition["type"], depends_on)
+            body["validations"] = _metaobject_validation(state, definition["type"], depends_on)
             add(f"metafield_definition:{namespace_key}", "metaobjects", "create_metafield_definition",
                 _definition_lookup(namespace_key), body,
-                {"type": "metaobject_reference", "name": reference["name"]}, depends_on)
+                {"type": "metaobject_reference", "name": reference["name"], "target": definition["type"]},
+                depends_on)
             references.add(namespace_key)
 
     metafields = decisions.get("metafields")
@@ -255,6 +267,12 @@ def _compare(kind, old, new):
             reasons.append(f"{field} {_shown(old.get(field))} -> {_shown(new.get(field))}")
     if kind in RENAMED_KINDS and old.get("name") != new.get("name"):
         update.append("name")
+    if kind == "metafield_definition" and new.get("target") and old.get("target") != new["target"]:
+        if old.get("target"):
+            reasons.append(f"target {old['target']} -> {new['target']}")
+        else:
+            # created without its target (the former reference_validation false): the target is added
+            update.append("validations")
     if kind == "metaobject_definition":
         old_fields, new_fields = old.get("fields") or {}, new.get("fields") or {}
         old_targets, new_targets = old.get("targets") or {}, new.get("targets") or {}

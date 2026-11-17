@@ -17,7 +17,7 @@ Flowkiwi model: a metaobject definition (`type`, `name`, `displayNameField`, typ
 The mapping has no `sources`: its columns are those of `mappings/products.json`.
 
 ```json
-{"version": 1, "concept": "metaobjects", "reference_validation": false,
+{"version": 1, "concept": "metaobjects",
  "definitions": [{"type": "marque", "name": "Marque", "display_name_field": "nom", "entry_key": "nom", "status": "ACTIVE",
                   "fields": [{"key": "nom", "name": "Nom", "type": "single_line_text_field", "required": true,
                               "value": {"from": ["main:marque"], "map": {"toastine": "Toastine"}, "map_ignore_case": true}}],
@@ -25,21 +25,18 @@ The mapping has no `sources`: its columns are those of `mappings/products.json`.
                   "origin": "agent", "reason": "La colonne Marque devient une fiche par marque reliée aux produits."}]}
 ```
 
-| Key                    | Meaning                                                                                                      | Default              |
-| ---------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------- |
-| `reference_validation` | the reference metafield definitions carry a validation on their metaobject definition                        | `false`              |
-| `type`                 | definition type, 2-64 characters in `snake_case` (lowercase letters, digits, `_`, no hyphen)                 | required             |
-| `name`                 | definition name, in `decisions.data_language`                                                                | required             |
-| `display_name_field`   | key of the field shown as the entry name                                                                     | required             |
-| `entry_key`            | key of the field whose value gives the entry handle (its slug), never a list type                            | `display_name_field` |
-| `status`               | status of the entries: `ACTIVE` or `DRAFT`                                                                   | required             |
-| `fields`               | `[{"key", "name", "type", "required", "target", "value"}]`, keys in `snake_case`, names in the data language | required             |
-| `reference`            | `{"metafield": "<namespace>.<key>", "name"}`: the product metafield pointing at the entry                    | none                 |
-| `origin`, `reason`     | who chose the definition and why, as in `references/mapping.md`                                              | none                 |
+| Key                  | Meaning                                                                                                      | Default              |
+| -------------------- | ------------------------------------------------------------------------------------------------------------ | -------------------- |
+| `type`               | definition type, 2-64 characters in `snake_case` (lowercase letters, digits, `_`, no hyphen)                 | required             |
+| `name`               | definition name, in `decisions.data_language`                                                                | required             |
+| `display_name_field` | key of the field shown as the entry name                                                                     | required             |
+| `entry_key`          | key of the field whose value gives the entry handle (its slug), never a list type                            | `display_name_field` |
+| `status`             | status of the entries: `ACTIVE` or `DRAFT`                                                                   | required             |
+| `fields`             | `[{"key", "name", "type", "required", "target", "value"}]`, keys in `snake_case`, names in the data language | required             |
+| `reference`          | `{"metafield": "<namespace>.<key>", "name"}`: the product metafield pointing at the entry                    | none                 |
+| `origin`, `reason`   | who chose the definition and why, as in `references/mapping.md`                                              | none                 |
 
-`reference_validation` is `false` by default: the MCP schema of `create_metafield_definition` only accepts a string for `validations.value` while the API wants an array, so a reference definition with a validation cannot be created. Set it to `true` once product-management accepts it. The field validations of the `metaobject_reference` fields inside a metaobject definition are not concerned. A metaobject definition refused on such a field validation needs a skill change: report it, never send a UUID or another value by hand.
-
-A workspace extracted when the default was still `true` keeps `"reference_validation": true` in `concepts/metaobjects.json` and in its recorded decision, while a mapping without the key now means `false`. The dry-run then prints, in its `Concepts` section, `decision metaobjects has reference_validation true while mappings/metaobjects.json leaves it out (default false)`, followed by the commands to run: a warning, not a blocker. Run `$S/extract.py <dir> metaobjects` again, check the preview, then the `state.py decide` it prints (same origin and reason), before creating the shared elements.
+A reference (the product metafield definition of `reference`, and a `metaobject_reference` or `list__metaobject_reference` field) always carries its target: a validation `{"name": "/api/metafield_definition_validation_types/metaobject_definition", "value": ["<UUID of the target metaobject definition>"]}`, a one-item array holding the bare UUID, never an IRI. Product-management refuses a reference definition without it (422), so the target definition is always created first. `reference_validation`, a key of older mappings, is ignored: the dry-run asks to remove it.
 
 1. **Definition**: one definition per "cms" column, `type` and field keys from the column code in `snake_case` (`marque`, `nom`), names in the data language (`Marque`, `Nom`). Field types are the metafield types (`references/metafields.md`) plus `metaobject_reference` and `list__metaobject_reference`, which need a `target`: the `type` of a definition placed earlier in `definitions`. Product and media references are not in this version.
 2. **Entries**: the `entry_key` value of each product gives the entry handle (`Brioche & Co` -> `brioche-co`); products with the same handle share one entry. Spelling variants (`TOASTINE`, `Toastine`) give the same handle: map them to one spelling (`map` with `map_ignore_case`), else `entry_conflict` keeps the first one.
@@ -67,15 +64,15 @@ Brand and vendor: when a metaobject field reads the column that `product.vendor`
 
 3. `$S/state.py decide <dir> --key metaobjects --value-file <dir>/concepts/metaobjects.json --origin agent` (`--origin developer` when the developer asked for it).
 
-`concepts/metaobjects.json`: `{"reference_validation": false, "definitions": [{"type", "name", "displayNameField", "status", "fields": [{"key", "name", "type", "required", "target"}], "reference": {"metafield", "name"}}], "entries": [{"definition", "handle", "fields": {"<key>": "<value>"}}], "values": {"<handle>": {"<type>": "<entry handle>"}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`). `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
+`concepts/metaobjects.json`: `{"definitions": [{"type", "name", "displayNameField", "status", "fields": [{"key", "name", "type", "required", "target"}], "reference": {"metafield", "name"}}], "entries": [{"definition", "handle", "fields": {"<key>": "<value>"}}], "values": {"<handle>": {"<type>": "<entry handle>"}}, "warnings": [...], "provenance": {"products": "<sha256>", "mapping": "<sha256>"}}` (`provenance`: what it was extracted from, checked by the dry-run, `references/state.md` `## Concept files`). `payload.py` and `plan_shared.py` read it: any change goes through the mapping and this file, never through worker instructions. Never edit it by hand.
 
 ## Shared elements
 
 From `$S/plan_shared.py <dir>` (`references/create.md` step 3), in its order after the collections: the metaobject definitions, then their entries (definition order, then entry order), then the reference metafield definitions. Check each operation with `describe_operation` before its first call, look up before each creation, copy the body verbatim, record the key with module `metaobjects` and the `spec` of the plan entry. Names and values are in the data language: no `locale` argument.
 
-- **Definition** `metaobject_definition:<type>`: `call_operation list_metaobject_definitions` with the type; else `call_write_operation create_metaobject_definition` `{"body": <entry body>}`. A definition found with other fields than the `spec` is a destructive change: stop and ask.
-- **Entry** `metaobject:<type>:<handle>`: `call_operation list_metaobjects` with the definition IRI and the handle; else `call_write_operation create_metaobject` `{"body": {"definition": "<iri>", "handle": "toastine", "fields": [{"key": "nom", "value": "Toastine"}], "status": "ACTIVE"}}`. A reference field holds the IRI of the target entry (a list reference: a JSON array of IRIs as text), so an entry waits for its targets in `depends_on` (`plan_shared.py --ready`). This format is not verified yet: check it with `describe_operation` on the first entry with a reference field. A 422 there needs a skill change: report it, never send a UUID or another value by hand.
-- **Reference definition** `metafield_definition:<namespace>.<key>`: `call_operation list_metafield_definitions` with `ownerType` products (every page), then filter namespace and key client side (the operation filters neither); else `call_write_operation create_metafield_definition` with type `metaobject_reference`, and a `validations` entry naming the metaobject definition only with `"reference_validation": true`. If Flowkiwi rejects `validations` (`validations.value` must be an array for the API while the MCP schema takes a string), set `"reference_validation": false` (or leave the key out) in `mappings/metaobjects.json`, extract again, `state.py decide` again, and rerun `plan_shared.py`.
+- **Definition** `metaobject_definition:<type>`: `call_operation list_metaobject_definitions` with the type; else `call_write_operation create_metaobject_definition` `{"body": <entry body>}`. A reference field carries the validation on its target (`["<UUID of the target definition>"]`, `<metaobject_definition:<target> UUID>` until it is recorded), so a definition waits for its targets in `depends_on` (`plan_shared.py --ready`). A definition found with other fields or another target than the `spec` is a destructive change: stop and ask.
+- **Entry** `metaobject:<type>:<handle>`: `call_operation list_metaobjects` with the definition IRI and the handle; else `call_write_operation create_metaobject` `{"body": {"definition": "<iri>", "handle": "toastine", "fields": [{"key": "nom", "value": "Toastine"}], "status": "ACTIVE"}}`. Every field value is a string: a reference field holds the bare UUID of the target entry (a list reference: a JSON array of UUIDs as text), never its IRI, so an entry waits for its targets in `depends_on`. A 422 on that value needs a skill change: report it, never send another value by hand.
+- **Reference definition** `metafield_definition:<namespace>.<key>`: `call_operation list_metafield_definitions` with `ownerType` products (every page), then filter namespace and key client side (the operation filters neither); else `call_write_operation create_metafield_definition` with the body copied verbatim: type `metaobject_reference` and the validation on its metaobject definition (`"value": ["<UUID>"]`, an array, as `plan_shared.py` prints it). It waits for that definition in `depends_on`. A definition found without that validation, or with another target, is not reused silently: stop and ask (reused, it stays `unmanaged`, never modified). Its `spec` carries the `target` type.
 
 ## Per product
 
@@ -83,6 +80,10 @@ The reference metafield is an entry of the payload `metafields` (after the metaf
 
 Module-only mode (metaobjects added to products already created, on the worklist the main session built for this module): `$S/payload.py <dir> <handle> --step metafields`, and only the entries whose `shared` key is recorded with module `metaobjects` (the other metafields belong to their own concept).
 
+## Created without target
+
+A workspace created when references had no target (the former `"reference_validation": false`) has reference metafield definitions recorded without `target` in their `spec`. The dry-run prints `<key> was created without its target metaobject definition` for each one. `$S/plan_shared.py <dir> --changes` lists its fix in `updates`: `update_metafield_definition` with the `validations` body, applied per `references/phases.md` step 10 (then `state.py shared` with the new `spec`). Not destructive: the product values stay.
+
 ## Undo notes
 
-Order of a full undo: the product metafields, the products, the entries (reverse creation order: an entry referencing another goes before its target), the reference metafield definitions, then the metaobject definitions. `module:metaobjects` removes the reference metafields, the entries and both kinds of definitions, and keeps the products. A 409 on a definition still used (entries or a metafield definition created outside this migration) is reported, not forced.
+Order of a full undo: the product metafields, the products, the entries (reverse creation order: an entry referencing another goes before its target), the reference metafield definitions, then the metaobject definitions. A metaobject definition is the target of its reference definition and of the reference fields of other definitions: undo those first (`shared:metafield_definition:<namespace>.<key>`) before `shared:metaobject_definition:<type>`, else product-management may refuse the deletion. `module:metaobjects` removes the reference metafields, the entries and both kinds of definitions, and keeps the products. A 409 on a definition still used (entries or a metafield definition created outside this migration) is reported, not forced.

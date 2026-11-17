@@ -22,6 +22,7 @@ HANDLE_MAX = 255
 STATUSES = ("DRAFT", "ACTIVE")
 REFERENCE_TYPES = ("metaobject_reference", "list__metaobject_reference")
 FIELD_TYPES = metafields.METAFIELD_TYPES + REFERENCE_TYPES
+# reference_validation: legacy key, ignored (a reference definition always carries its target), the dry-run warns
 KEYS = frozenset(("version", "concept", "reference_validation", "definitions"))
 DEFINITION_KEYS = frozenset(("type", "name", "display_name_field", "entry_key", "status", "fields", "reference"))
 FIELD_KEYS = frozenset(("key", "name", "type", "required", "target", "value"))
@@ -82,8 +83,6 @@ def validate(m: dict) -> None:
     if not isinstance(m, dict) or m.get("concept") != "metaobjects":
         raise MappingError("concept must be 'metaobjects', got %r" % (m.get("concept") if isinstance(m, dict) else m,))
     _check_keys(m, KEYS, "mapping")
-    if not isinstance(m.get("reference_validation", False), bool):
-        raise MappingError("reference_validation: true or false")
     definitions = m.get("definitions")
     if not isinstance(definitions, list) or not definitions:
         raise MappingError("definitions: a non-empty list of {\"type\", \"name\", \"display_name_field\", "
@@ -268,8 +267,7 @@ def build(products: List[dict], rows: Dict[str, list], m: dict, sources: dict, w
             for handle, entry in links:
                 if entry in handles[kind]:
                     values.setdefault(handle, {})[kind] = entry
-    return {"reference_validation": m.get("reference_validation", False),
-            "definitions": [output_definition(d, cleaner) for d in m["definitions"]],
+    return {"definitions": [output_definition(d, cleaner) for d in m["definitions"]],
             "entries": entries, "values": values, "warnings": warnings}
 
 
