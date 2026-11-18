@@ -4,7 +4,7 @@ Load this file only when the Flowkiwi MCP tools are missing or ask for authentic
 
 The server is a remote MCP over streamable HTTP with OAuth: `https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp`. Name it `flowkiwi`.
 
-The validated setup also sent the header `Flowkiwi-Api-Version: unstable`. If an operation used by this skill is missing on the tenant, add that header: `headers` in Claude Code, Cursor and Gemini CLI, `http_headers = { "Flowkiwi-Api-Version" = "unstable" }` in Codex.
+Every block sends the header `Flowkiwi-Api-Version: 2026-10` to pin the API version this skill was written for. Keep it: without it the tenant answers with its default version, which can change.
 
 Only Claude Code has been validated end to end. The other blocks follow each agent's documentation (checked 2026-10-26) and have not been tested yet: if one fails, say so to the developer rather than improvising.
 
@@ -17,7 +17,8 @@ Only Claude Code has been validated end to end. The other blocks follow each age
   "mcpServers": {
     "flowkiwi": {
       "type": "http",
-      "url": "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp"
+      "url": "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp",
+      "headers": { "Flowkiwi-Api-Version": "2026-10" }
     }
   }
 }
@@ -32,6 +33,7 @@ Authenticate with `/mcp` in a session.
 ```toml
 [mcp_servers.flowkiwi]
 url = "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp"
+http_headers = { "Flowkiwi-Api-Version" = "2026-10" }
 ```
 
 Authenticate with `codex mcp login flowkiwi` in a shell.
@@ -44,7 +46,8 @@ Authenticate with `codex mcp login flowkiwi` in a shell.
 {
   "mcpServers": {
     "flowkiwi": {
-      "url": "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp"
+      "url": "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp",
+      "headers": { "Flowkiwi-Api-Version": "2026-10" }
     }
   }
 }
@@ -61,6 +64,7 @@ Authenticate from Cursor settings, MCP section (Connect / Login on the `flowkiwi
   "mcpServers": {
     "flowkiwi": {
       "httpUrl": "https://<tenant>.product-management.<env>.flowkiwi.net/api/mcp",
+      "headers": { "Flowkiwi-Api-Version": "2026-10" },
       "oauth": { "enabled": true }
     }
   }
@@ -71,4 +75,4 @@ Authenticate with `/mcp auth flowkiwi` in a session.
 
 ## Other agents
 
-Any MCP client that supports remote streamable HTTP servers with OAuth (dynamic client registration) should work: declare the URL above under the name `flowkiwi` and run its OAuth login.
+Any MCP client that supports remote streamable HTTP servers with OAuth (dynamic client registration) should work: declare the URL above under the name `flowkiwi` with the `Flowkiwi-Api-Version: 2026-10` header and run its OAuth login.
